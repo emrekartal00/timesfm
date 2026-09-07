@@ -5,17 +5,24 @@ downloads are blocked. Copy this whole folder to the target machine.
 
 ## Rebuild
 
-    ./rejoin.sh          # macOS / Linux
-    rejoin.bat           # Windows
+Python only, no shell required — works on Windows, macOS and Linux:
 
-Both verify checksums, concatenate the parts, and confirm the result matches
-the original SHA-256. If the check fails, a part was corrupted in transit —
-recopy that part.
+    python rejoin_weights.py
 
-Manual equivalent:
+Run it from inside this folder, or point it anywhere:
 
-    cat model.safetensors.part-a? > model.safetensors                        # mac/linux
-    copy /b part-aa + part-ab + part-ac model.safetensors                    # windows cmd
+    python rejoin_weights.py --dir C:\path\to\transfer
+
+It verifies every part against SHA256SUMS, joins them, checks the rebuilt file
+against original.sha256, then deletes the parts (pass --keep to retain them).
+Needs only the standard library — no pip install, no numpy, no torch.
+
+To create the parts in the first place:
+
+    python rejoin_weights.py --split model.safetensors --parts 3
+
+`rejoin.sh` (macOS/Linux) and `rejoin.bat` (Windows) do the same thing if you
+prefer a shell.
 
 ## Use it
 
