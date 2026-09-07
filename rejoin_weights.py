@@ -180,6 +180,76 @@ def do_join(directory, output, keep):
     print(f'    TIMESFM_CHECKPOINT={directory}')
 
 
+def do_verify(directory, path):
+  """Check an already-joined file against original.sha256, renaming if needed."""
+  target = os.path.join(directory, TARGET)
+
+  if path:
+    candidate = path
+  elif os.path.exists(target):
+    candidate = target
+  else:
+    # Someone joined the parts by hand and named the result something else.
+    # Find a plausible file: right size, not one of the parts.
+    expected_size = None
+    sums_path = os.path.join(directory, "original.sha256")
+    guesses = [
+        n for n in os.listdir(directory)
+        if not n.startswith(PART_GLOB)
+        and n not in ("SHA256SUMS", "original.sha256", "config.json")
+        and os.path.isfile(os.path.join(directory, n))
+        and os.path.getsize(os.path.join(directory, n)) > 100 * 1024 * 1024
+    ]
+    if len(guesses) == 1:
+      candidate = os.path.join(directory, guesses[0])
+      print(f"Found a large file that is probably the join: {guesses[0]}")
+    elif not guesses:
+      raise SystemExit(f"No joined file found in {directory}. Pass one explicitly.")
+    else:
+      raise SystemExit("Several candidates: " + ", ".join(guesses) +
+                       "\nPass the right one explicitly.")
+
+  if not os.path.exists(candidate):
+    raise SystemExit(f"No such file: {candidate}")
+
+  size = os.path.getsize(candidate)
+  print(f"Checking {os.path.basename(candidate)} ({human(size)}, {size:,} bytes)")
+
+  expected_path = os.path.join(directory, "original.sha256")
+  if not os.path.exists(expected_path):
+    raise SystemExit("No original.sha256 in this folder; cannot verify.")
+  with open(expected_path, "r", encoding="utf-8") as fh:
+    expected = fh.read().split()[0].strip()
+
+  print("Hashing (a minute or two for 1.3 GB) ...")
+  actual = sha256_of(candidate, os.path.basename(candidate))
+
+  if actual != expected:
+    print(f"\n  expected {expected}")
+    print(f"  actual   {actual}")
+    raise SystemExit(
+        "\nMISMATCH -- the joined file is not correct.\n"
+        "If you still have the .part-* files, the transfer is probably fine and\n"
+        "only the join went wrong (usually the wrong order). Delete the joined\n"
+        "file and run:  python rejoin_weights.py\n"
+        "That joins them in the correct order and re-checks."
+    )
+
+  print(f"  OK  {actual}")
+  print("\nThe file is byte-for-byte identical to the original.")
+
+  # Make sure it is named what the loader expects.
+  if os.path.abspath(candidate) != os.path.abspath(target):
+    os.rename(candidate, target)
+    print(f"Renamed {os.path.basename(candidate)} -> {TARGET}")
+
+  if not os.path.exists(os.path.join(directory, "config.json")):
+    print("\nWARNING: config.json is missing -- the model will not load without it.")
+  else:
+    print("\nReady. Point checkpoint_path at this folder:")
+    print(f"    TIMESFM_CHECKPOINT={directory}")
+
+
 def do_split(source, n_parts):
   """Split a file into n roughly equal parts, writing SHA256SUMS alongside."""
   directory = os.path.dirname(os.path.abspath(source)) or "."
@@ -225,6 +295,8 @@ def main():
   ap.add_argument("--output", default=None, help="output path for the joined file")
   ap.add_argument("--keep", action="store_true",
                   help="keep the .part-* files after a successful join")
+  ap.add_argument("--verify", nargs="?", const=True, metavar="FILE",
+                  help="check an already-joined file and rename it correctly")
   ap.add_argument("--split", metavar="FILE", help="split FILE instead of joining")
   ap.add_argument("--parts", type=int, default=3, help="number of parts for --split")
   a = ap.parse_args()
@@ -236,6 +308,11 @@ def main():
   directory = a.dir or os.path.dirname(os.path.abspath(__file__))
   if not os.path.isdir(directory):
     raise SystemExit(f"Not a folder: {directory}")
+
+  if a.verify:
+    do_verify(directory, None if a.verify is True else a.verify)
+    return
+
   do_join(directory, a.output, a.keep)
 
 
