@@ -28,6 +28,13 @@ LICENSE
 """
 
 import argparse
+import os
+
+# Where the weights come from. Defaults to the HuggingFace repo id, but on a
+# machine where HF is blocked, point this at a local folder holding
+# config.json + model.safetensors (see transfer/README-TRANSFER.md):
+#     export TIMESFM_CHECKPOINT=/path/to/weights
+CHECKPOINT = os.environ.get("TIMESFM_CHECKPOINT", "google/timesfm-3.0-pytorch")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--only", type=int, help="run just one part, by number")
@@ -133,10 +140,10 @@ if part(2, "CHOOSING A DEVICE"):
 # flags explicitly -- what you see is what you get.
 
 if part(3, "LOADING THE MODEL"):
-  print("loading google/timesfm-3.0-pytorch ...")
+  print(f"loading {CHECKPOINT} ...")
 
 config = ModelConfig(
-    checkpoint_path="google/timesfm-3.0-pytorch",
+    checkpoint_path=CHECKPOINT,
     device=DEVICE,
     per_core_batch_size=8,
     local_files_only=args.offline,

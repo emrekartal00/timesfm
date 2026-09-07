@@ -17,6 +17,11 @@ parser.add_argument("--horizon", type=int, default=24)
 parser.add_argument("--device", help="cuda / mps / cpu (default: auto-detect)")
 parser.add_argument("--batch-size", type=int, default=8)
 parser.add_argument(
+    "--checkpoint",
+    default=os.environ.get("TIMESFM_CHECKPOINT", "google/timesfm-3.0-pytorch"),
+    help="HF repo id, or a local folder with config.json + model.safetensors",
+)
+parser.add_argument(
     "--offline",
     action="store_true",
     help="block all Hub access; requires weights already in ~/.cache/huggingface",
@@ -67,7 +72,7 @@ print(f"device: {device}" + (" (offline)" if args.offline else ""))
 
 forecaster = TimesFM3Evaluator(
     ModelConfig(
-        checkpoint_path="google/timesfm-3.0-pytorch",
+        checkpoint_path=args.checkpoint,
         per_core_batch_size=args.batch_size,
         device=device,
     )
