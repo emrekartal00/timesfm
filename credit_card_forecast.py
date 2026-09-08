@@ -56,8 +56,10 @@ mdl.add_argument("--no-covariates", action="store_true", help="TimesFM only")
 mdl.add_argument("--znorm", action="store_true", help="TimesFM only")
 mdl.add_argument("--context", type=int, default=S.TIMESFM_CONTEXT,
                  help="TimesFM only: cap the history fed to the model")
-mdl.add_argument("--checkpoint", default=None, help="TimesFM weights path or repo id")
-mdl.add_argument("--device", default=None, help="cuda / mps / cpu")
+mdl.add_argument("--checkpoint", default=None,
+                 help="folder holding the TimesFM weights, or a HuggingFace "
+                      "repo id. Default comes from TIMESFM_WEIGHTS in settings.py")
+mdl.add_argument("--device", default=S.TIMESFM_DEVICE, help="cuda / mps / cpu")
 mdl.add_argument("--num-leaves", type=int, default=S.GBM_NUM_LEAVES, help="GBM only")
 mdl.add_argument("--learning-rate", type=float, default=S.GBM_LEARNING_RATE, help="GBM only")
 mdl.add_argument("--rounds", type=int, default=S.GBM_ROUNDS, help="GBM only")

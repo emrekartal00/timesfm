@@ -181,7 +181,7 @@ your sheet has several, one is chosen and reported; use `--currency` to pick.
 | `--no-covariates` | off | TimesFM | drop calendar covariates. **Costs a lot** — 80% worse in testing |
 | `--znorm` | off | TimesFM | z-normalise before the model, undo after |
 | `--context N` | all | TimesFM | cap how much history is fed |
-| `--checkpoint PATH` | HF repo | TimesFM | local weights folder for an offline machine |
+| `--checkpoint PATH` | `settings.TIMESFM_WEIGHTS` | TimesFM | folder holding the weights, for an offline machine |
 | `--device` | auto | TimesFM | `cuda`, `mps`, `cpu` |
 | `--num-leaves N` | `31` | GBM | tree size. Lower = smoother |
 | `--learning-rate F` | `0.05` | GBM | lower needs more rounds |
@@ -269,7 +269,17 @@ rather than daily data.
 
 **Part 4 — defaults for your data**, so you stop retyping the same flags.
 
-**Part 5 — TimesFM settings**: strategy, how much history to use, rescaling.
+**Part 5 — TimesFM settings**: where the weights are, which processor to use,
+strategy, and how much history to feed. On a machine that cannot reach the
+internet, `TIMESFM_WEIGHTS` is the one to set — point it at the folder holding
+`model.safetensors` and `config.json`, not at the file:
+
+```python
+TIMESFM_WEIGHTS = r"C:\Users\you\Desktop\transfer"
+```
+
+Keep the `r` before the quote on Windows. See `OFFLINE-WEIGHTS.md` for getting
+the weights onto that machine in the first place.
 
 Anything you set here can still be overridden for one run from the command
 line, and each comment names the flag that does it.
@@ -385,8 +395,9 @@ copes with far less.
 **Forecast is flat or zero** — usually an all-NaN or constant context. Check the
 `mean change per step` line.
 
-**Hangs on an offline machine** — TimesFM is trying to reach HuggingFace. Point
-`--checkpoint` at a local weights folder; see `OFFLINE-WEIGHTS.md`.
+**Hangs on an offline machine** — TimesFM is trying to reach HuggingFace. Set
+`TIMESFM_WEIGHTS` in `settings.py` to your local weights folder; see
+`OFFLINE-WEIGHTS.md`.
 
 **Everything runs locally.** Your data never leaves the machine.
 

@@ -287,6 +287,32 @@ TIMESFM_CONTEXT = None
 #     python sweep.py --excel yourfile.xlsx --only timesfm --preset full
 # Command line: --context 365
 
+TIMESFM_WEIGHTS = None
+# WHERE THE TIMESFM WEIGHTS ARE. This is the setting to change on a machine
+# that cannot reach the internet.
+#
+# None (no quotes) means download them from HuggingFace on first use and cache
+# them. That is fine on a machine with internet.
+#
+# On a blocked machine, put the path to the FOLDER holding the weights here.
+# The folder must contain both model.safetensors and config.json:
+#
+#     TIMESFM_WEIGHTS = r"C:\Users\you\Desktop\transfer"
+#
+# Keep the r before the quote on Windows. Without it, \t and \n in the path are
+# read as tab and newline characters and it breaks in confusing ways. Forward
+# slashes work too: "C:/Users/you/Desktop/transfer"
+#
+# Point at the folder, NOT at the model.safetensors file itself.
+# See OFFLINE-WEIGHTS.md for getting the weights onto that machine.
+# Command line: --checkpoint C:\path\to\transfer
+
+TIMESFM_DEVICE = None
+# Which processor to use. None means pick the best available automatically,
+# which is right almost always. Override with "cuda" for an NVIDIA GPU, "mps"
+# on an Apple laptop, or "cpu" to force the slow-but-always-works option.
+# Command line: --device cpu
+
 TIMESFM_ZNORM = False
 # Rescales your numbers before forecasting and undoes it afterwards. Worth
 # trying if your amounts are very large or very small and the forecast looks

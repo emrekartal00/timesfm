@@ -320,8 +320,13 @@ class TimesFMParams:
   znorm: bool = S.TIMESFM_ZNORM
   make_positive: bool = False
   batch_size: int = 8
-  device: str | None = None
-  checkpoint: str = os.environ.get("TIMESFM_CHECKPOINT", "google/timesfm-3.0-pytorch")
+  device: str | None = S.TIMESFM_DEVICE
+  # Where the weights come from, in order of precedence: --checkpoint on the
+  # command line, then TIMESFM_WEIGHTS in settings.py, then the TIMESFM_CHECKPOINT
+  # environment variable, then the public HuggingFace repo.
+  checkpoint: str = (S.TIMESFM_WEIGHTS
+                     or os.environ.get("TIMESFM_CHECKPOINT")
+                     or "google/timesfm-3.0-pytorch")
   context: int | None = S.TIMESFM_CONTEXT   # cap on history fed to the model
 
 
