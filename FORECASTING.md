@@ -28,9 +28,19 @@ Use `python -m pip`, not plain `pip`: it guarantees the packages land in the
 same Python you run the scripts with, which is the usual reason an install looks
 fine and the script still says `No module named ...`.
 
-The versions in that file are pinned and verified together. The one to leave
-alone is **`numpy==1.26.4`** — numpy 2 breaks the compiled parts of
-scikit-learn, matplotlib, statsmodels and lightgbm all at once.
+That file gives **minimum** versions rather than exact ones, on purpose. Exact
+pins make pip try to compile a package from source when it has no ready-built
+one for your Python, which on Windows fails with:
+
+```
+preparing metadata (pyproject.toml) did not run successfully
+failed to activate VS environment: no vswhere.exe
+```
+
+That message means "no prebuilt package, and no C++ compiler to build one". The
+fix is never to install Visual Studio — it is to let pip choose a version that
+ships ready-built. If you hit it anyway, your Python is likely too new for one
+of the packages; 3.11 or 3.12 is the safest choice today.
 
 ## 2. Quick start
 
