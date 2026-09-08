@@ -56,10 +56,18 @@ def _find_col(df, override, *keywords):
   return None
 
 
-def load(excel, sheet=0, date_col=None, balance_col=None, currency_col=None,
-         currency=None, growth_col=None, use_growth=False, grid="auto"):
+def load(excel, sheet=None, date_col=None, balance_col=None, currency_col=None,
+         currency=None, growth_col=None, use_growth=False, grid=None):
+  # Defaults come from settings.py so calling load() directly behaves the same
+  # way the scripts do, rather than silently reading a different sheet.
   """Read a sheet and return a Series ready to forecast."""
   notes = []
+  sheet = S.SHEET if sheet is None else sheet
+  grid = S.DEFAULT_GRID if grid is None else grid
+  date_col = date_col or S.COLUMN_DATE
+  balance_col = balance_col or S.COLUMN_BALANCE
+  currency_col = currency_col or S.COLUMN_CURRENCY
+  growth_col = growth_col or S.COLUMN_GROWTH
   df = pd.read_excel(excel, sheet_name=sheet)
 
   date_col = _find_col(df, date_col, "date", "tarih")
@@ -487,13 +495,71 @@ def gbm_forecast(data, target, upto, horizon, p: GBMParams):
   return quant[:, 1], quant
 
 
-def forecast(model, data, target, upto, horizon, params=None):
-  """Single entry point. model is 'timesfm' or 'gbm'."""
+def _raw_forecast(model, data, target, upto, horizon, params):
   if model == "timesfm":
     return timesfm_forecast(data, target, upto, horizon, params or TimesFMParams())
   if model == "gbm":
     return gbm_forecast(data, target, upto, horizon, params or GBMParams())
   raise ValueError(f"unknown model {model!r}")
+
+
+def _conformal_width(model, data, target, upto, horizon, params, origins):
+  """How much the p10-p90 interval has to widen to actually cover 80%.
+
+  Split-conformal calibration (Romano et al., conformalized quantile
+  regression). A quantile model's own interval is a claim; this measures how
+  often that claim held on data the model had not seen, and returns the padding
+  needed to make it true.
+
+  For each calibration origin the model is refit on everything before it and
+  scored on the block that follows. The conformity score for one step is how far
+  outside the interval the actual value fell -- negative when it fell inside.
+  The 80th percentile of those scores is the padding.
+  """
+  scores = []
+  for k in range(1, origins + 1):
+    cut = upto - k * horizon
+    if cut < horizon * 3:
+      break
+    try:
+      _, quant = _raw_forecast(model, data, target, cut, horizon, params)
+    except Exception:
+      continue
+    actual = data.target(target).to_numpy()[cut:cut + horizon].astype(float)
+    lo, hi = quant[:, 0], quant[:, 2]
+    scores.extend(np.maximum(lo - actual, actual - hi))
+  if not scores:
+    return 0.0
+  # Never tighten: this corrects overconfidence, and a model whose interval is
+  # already honest should be left alone.
+  return float(max(0.0, np.quantile(scores, 0.8)))
+
+
+_CONFORMAL_CACHE = {}
+
+
+def forecast(model, data, target, upto, horizon, params=None, calibrate=None):
+  """Single entry point. model is 'timesfm' or 'gbm'.
+
+  With calibration on, the p10/p90 bounds are widened by an amount measured on
+  held-out data, so the stated 80% interval covers about 80% in practice.
+  """
+  point, quant = _raw_forecast(model, data, target, upto, horizon, params)
+  if calibrate is None:
+    calibrate = S.CALIBRATE_INTERVALS
+  if not calibrate:
+    return point, quant
+
+  key = (model, target, upto, horizon, id(data), repr(params))
+  if key not in _CONFORMAL_CACHE:
+    _CONFORMAL_CACHE[key] = _conformal_width(
+        model, data, target, upto, horizon, params, S.CALIBRATION_ORIGINS)
+  pad = _CONFORMAL_CACHE[key]
+  if pad > 0:
+    quant = quant.copy()
+    quant[:, 0] -= pad
+    quant[:, 2] += pad
+  return point, quant
 
 
 # ================================================================ evaluation ==

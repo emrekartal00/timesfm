@@ -185,6 +185,29 @@ GBM_FEATURE_FRACTION = 0.9
 # Sensible range: 0.5 to 1.0.
 
 
+CALIBRATE_INTERVALS = True
+# Widen the p10-p90 range so it actually contains about 80% of real values.
+#
+# WHY THIS EXISTS. A model states an interval, but that statement can simply be
+# wrong. The gradient-boosted model in particular fits its training data tightly,
+# so its interval comes out too narrow -- on real card data it claimed 80% and
+# delivered 52%. An interval that misses half the time is worse than useless for
+# planning, because it reads as confidence you do not have.
+#
+# WHAT IT DOES. Before forecasting, the model is refit a few times on older
+# slices of your history and checked against what actually happened next. That
+# says how far outside its interval reality tends to land, and the final
+# interval is widened by exactly that much. It never narrows one, so a model
+# that was already honest is left alone.
+#
+# COST. A few extra refits, so it is slower. Set to False if you only care about
+# the middle number and not the range.
+
+CALIBRATION_ORIGINS = 3
+# How many past slices to check against. More is steadier and slower.
+# Sensible range: 2 to 6.
+
+
 # =============================================================================
 # PART 3. WHAT THE GBM LOOKS BACK AT
 # =============================================================================

@@ -347,6 +347,26 @@ To change what is swept, edit `TIMESFM_GRID` and `GBM_GRID` at the top of
 coverage is not better — it is a sharper guess that is dishonest about its own
 uncertainty, and it will under-warn you in a bad month.
 
+`CALIBRATE_INTERVALS` in `settings.py` fixes this, and is on by default. The
+gradient-boosted model fits its training data tightly, so its stated interval
+comes out too narrow — on real card data it claimed 80% and delivered 52%.
+Calibration refits the model on older slices of your history, measures how far
+outside its interval reality actually landed, and widens the final interval by
+exactly that much. It never narrows one, so a model that was already honest is
+untouched.
+
+Measured over four origins:
+
+| model | calibration | MAE | pinball | coverage |
+|---|---|---|---|---|
+| gbm | off | 858 | 281 | 69% |
+| gbm | **on** | 858 | **277** | **81%** |
+| timesfm | off | 844 | 280 | 85% |
+| timesfm | on | 844 | 280 | 85% (unchanged — already honest) |
+
+The point forecast never moves; only the range does. The cost is a few extra
+refits per forecast.
+
 **sMAPE is not reported** for signed targets. It is meaningless on a series that
 crosses zero; it rated the *worst* model best in testing.
 
