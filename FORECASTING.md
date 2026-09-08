@@ -99,6 +99,29 @@ and rerun `credit_card_forecast.py` with whatever won.
 
 ## 3. What the script does to your data
 
+### `--target growth` and `--use-growth` are not the same thing
+
+They sound alike and catch people out:
+
+* **`--target growth`** — *what* to forecast. The daily change rather than the
+  balance level.
+* **`--use-growth`** — *where that daily change comes from*. Your sheet's column
+  instead of being recomputed from the balance.
+
+**You almost certainly only need the first.** The script recomputes the daily
+change from the balance, compares it with your growth column, and prints how
+closely they match. A growth column is normally just balance minus yesterday's
+balance, so they match exactly, and the flag then changes nothing — the script
+says so outright:
+
+```
+found 'growth': identical to balance.diff() on every step, so
+--use-growth would change nothing. Skip it.
+```
+
+It only matters when the two disagree, which means a stale formula or an
+inserted row — and in that case the recomputed version is the one to trust.
+
 **It only ever reads the date and balance columns.** Day of month, year,
 yearmonth, day of week and growth are all derived from those, so they are
 recomputed rather than trusted — a stale fill-down or an inserted row is a
@@ -141,7 +164,7 @@ knowable in advance.
 | `--currency-col NAME` | auto | override currency column detection |
 | `--currency TRY` | most rows | which currency to model |
 | `--growth-col NAME` | auto | name of your growth column |
-| `--use-growth` | off | trust that column instead of recomputing |
+| `--use-growth` | off | read the daily change from your sheet's column instead of recomputing it. **You probably do not need this** — see below |
 | `--grid MODE` | `auto` | `auto`, `business`, `calendar` |
 
 Column detection matches English and Turkish names (`date`/`tarih`,
@@ -156,7 +179,8 @@ your sheet has several, one is chosen and reported; use `--currency` to pick.
 | argument | default | meaning |
 |---|---|---|
 | `--target purchases` | `purchases` | usage only: the positive part of the change |
-| `--target net_change` | | purchases **and** payments, signed |
+| `--target growth` | | purchases **and** payments, signed. Same thing your sheet's growth column holds |
+| `--target net_change` | | an alias for `growth`; both names work |
 | `--target balance` | | the outstanding level itself |
 | `--horizon N` | `30` | steps ahead. On a business grid this is **trading days**, so 20 ≈ 4 weeks. The output prints the real dates. |
 

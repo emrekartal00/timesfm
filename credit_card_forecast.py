@@ -39,7 +39,7 @@ src.add_argument("--grid", default=S.DEFAULT_GRID, choices=["auto", "business", 
 
 what = ap.add_argument_group("what to forecast")
 what.add_argument("--target", default=S.DEFAULT_TARGET,
-                  choices=["purchases", "net_change", "balance"])
+                  choices=["purchases", "net_change", "growth", "balance"])
 what.add_argument("--horizon", type=int, default=S.DEFAULT_HORIZON, help="steps ahead")
 
 mdl = ap.add_argument_group("models")

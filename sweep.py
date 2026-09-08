@@ -43,7 +43,7 @@ ap.add_argument("--growth-col", default=None)
 ap.add_argument("--use-growth", action="store_true")
 ap.add_argument("--grid", default="auto", choices=["auto", "business", "calendar"])
 ap.add_argument("--target", default="net_change",
-                choices=["purchases", "net_change", "balance"])
+                choices=["purchases", "net_change", "growth", "balance"])
 ap.add_argument("--horizon", type=int, default=30)
 ap.add_argument("--origins", type=int, default=5,
                 help="rolling origins per configuration (more = slower, surer)")

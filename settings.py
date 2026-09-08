@@ -187,11 +187,28 @@ GBM_WINDOWS = (7, 14, 28)
 # type on the command line still wins over what is written here.
 
 DEFAULT_TARGET = "purchases"
-# What to forecast. Three choices, and the quotes are required:
+# WHAT to forecast. Quotes required.
 #   "purchases"   spending only. Payments are stripped out.
-#   "net_change"  spending AND payments, so the number can go negative.
+#   "growth"      spending AND payments, so the number can go negative. This is
+#                 the same thing your sheet's growth column holds.
+#   "net_change"  exactly the same as "growth". Both names work.
 #   "balance"     the outstanding amount itself, not the daily change.
-# Command line: --target net_change
+# Command line: --target growth
+#
+# This is a SEPARATE question from where the daily change comes from, which is
+# the --use-growth flag below. Two different things that sound alike:
+#
+#   --target growth    what to forecast: the daily change, not the balance
+#   --use-growth       where that daily change is read from: your sheet's
+#                      column, instead of being recomputed from the balance
+#
+# You almost certainly do not need --use-growth. The script recomputes the
+# daily change from the balance, checks it against your growth column, and
+# prints how well they agree. If they agree completely -- and they usually do,
+# since a growth column is normally just balance minus yesterday's balance --
+# the flag changes nothing at all, and the script will tell you so. It only
+# matters when the two disagree, which means a stale formula or an inserted
+# row, and in that case the recomputed version is the safer one anyway.
 
 DEFAULT_HORIZON = 30
 # How many steps ahead to forecast. On a weekends-dropped grid a step is a

@@ -36,8 +36,12 @@ class Series:
   notes: list
 
   def target(self, name):
+    # "growth" is the name spreadsheets use for the daily change; "net_change"
+    # is the same thing. Both are accepted so nobody has to learn a second word
+    # for a column they already have.
     return {"purchases": self.purchases,
             "net_change": self.net_change,
+            "growth": self.net_change,
             "balance": self.balance}[name]
 
 
@@ -130,9 +134,12 @@ def load(excel, sheet=0, date_col=None, balance_col=None, currency_col=None,
         if agree < 0.95:
           notes.append("WARNING: >5% disagreement. A stale fill-down or an "
                        "inserted row does that; recomputing is safer.")
+      elif agree >= 0.9999:
+        notes.append(f"found {gcol!r}: identical to balance.diff() on every "
+                     f"step, so --use-growth would change nothing. Skip it.")
       else:
         notes.append(f"found {gcol!r}, agrees on {agree:.0%} of steps; using the "
-                     f"recomputed version (use_growth=True to override)")
+                     f"recomputed version (--use-growth to prefer the sheet's)")
 
   net = net.fillna(0.0)
   purchases = net.clip(lower=0.0)
