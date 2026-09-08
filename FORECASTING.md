@@ -335,13 +335,38 @@ To change what is swept, edit `TIMESFM_GRID` and `GBM_GRID` at the top of
 
 ## 7. Reading the numbers
 
-| metric | meaning |
-|---|---|
-| **MAE** | average error of the single number. Lower is better. |
-| **pinball** | scores the whole p10/p50/p90 range, not just the point. Lower is better. **Trust this one** on a spiky series. |
-| **coverage** | share of actual values that landed inside p10–p90. Should be ≈80%. |
-| **MAE spike** | error on payment days only. |
-| **MAE other** | error on ordinary days only. |
+| metric | in plain terms | why this one |
+|---|---|---|
+| **MAE** | "on a typical day we are off by this many lira" | RMSE squares errors, so 45,000-lira payment days would drown out everything else. MAPE and sMAPE explode near zero, and this series sits near zero at weekends and goes negative on payments — sMAPE rated the *worst* model best when tested. |
+| **pinball** | "how good are all three numbers together, not just the middle one" | MAE grades only the middle number, so a model with a useless range can win on it. **Trust this one** on a spiky series. |
+| **coverage** | "when it claims 80%, is it really 80%?" | The honesty check. It is what caught a model claiming 80% and delivering 52%. |
+| **MAE spike** | error on payment days only | These are large and rare; averaged in, they hide everything else. |
+| **MAE other** | error on ordinary days only | What you actually live with day to day. |
+
+### Where the 80% came from, and how to change it
+
+Not from a judgement about your business. TimesFM only ever reports the nine
+deciles p10 to p90, so p10–p90 is the widest range it has, and 80% is what the
+architecture hands us.
+
+Calibration removes that limit, because it measures real errors rather than
+asking the model. `TARGET_COVERAGE` in `settings.py` sets the level:
+
+| asked for | actually got | average width |
+|---|---|---|
+| 50% | 69% | 2,059 |
+| 80% | 81% | 2,651 |
+| 90% | 88% | 3,030 |
+| 95% | 92% | 3,747 |
+
+Choosing is a question about consequences, not statistics: what does it cost to
+be surprised? 0.90 is reasonable for planning cash; 0.95 when being caught short
+is expensive. The range gets wider, and that width is the honest price of the
+extra certainty — a wider range is not a worse forecast, it is the same forecast
+told honestly.
+
+Asking for 50% returns 69%, not 50%. Calibration never *narrows* an interval, so
+below the model's natural width you simply get its natural width.
 
 **Coverage is the one people ignore.** A model with the lowest MAE and 50%
 coverage is not better — it is a sharper guess that is dishonest about its own

@@ -514,7 +514,7 @@ def _conformal_width(model, data, target, upto, horizon, params, origins):
   For each calibration origin the model is refit on everything before it and
   scored on the block that follows. The conformity score for one step is how far
   outside the interval the actual value fell -- negative when it fell inside.
-  The 80th percentile of those scores is the padding.
+  The padding is the TARGET_COVERAGE percentile of those scores.
   """
   scores = []
   for k in range(1, origins + 1):
@@ -532,7 +532,7 @@ def _conformal_width(model, data, target, upto, horizon, params, origins):
     return 0.0
   # Never tighten: this corrects overconfidence, and a model whose interval is
   # already honest should be left alone.
-  return float(max(0.0, np.quantile(scores, 0.8)))
+  return float(max(0.0, np.quantile(scores, S.TARGET_COVERAGE)))
 
 
 _CONFORMAL_CACHE = {}
@@ -550,7 +550,9 @@ def forecast(model, data, target, upto, horizon, params=None, calibrate=None):
   if not calibrate:
     return point, quant
 
-  key = (model, target, upto, horizon, id(data), repr(params))
+  # The level is part of the key, so changing TARGET_COVERAGE takes effect
+  # instead of reusing padding computed for a different level.
+  key = (model, target, upto, horizon, id(data), repr(params), S.TARGET_COVERAGE)
   if key not in _CONFORMAL_CACHE:
     _CONFORMAL_CACHE[key] = _conformal_width(
         model, data, target, upto, horizon, params, S.CALIBRATION_ORIGINS)

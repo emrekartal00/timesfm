@@ -203,6 +203,25 @@ CALIBRATE_INTERVALS = True
 # COST. A few extra refits, so it is slower. Set to False if you only care about
 # the middle number and not the range.
 
+TARGET_COVERAGE = 0.80
+# How often the range should actually contain the real value. 0.80 means "eight
+# times out of ten".
+#
+# WHY 0.80 IS THE DEFAULT. Not because it is the right number for you, but
+# because TimesFM only ever reports the nine deciles p10 to p90, and p10-p90 is
+# the widest pair it has. Calibration removes that limit: it measures real
+# errors, so it can hit any level you ask for.
+#
+# WHICH TO PICK. It is a question about consequences, not statistics. Ask what
+# it costs to be surprised:
+#   0.50  the range is a coin flip. Only useful as a rough middle.
+#   0.80  the default. Wrong roughly one month in five.
+#   0.90  wrong about one month in ten. Reasonable for planning cash.
+#   0.95  wrong about one month in twenty. Use when being caught short is
+#         expensive. The range will be noticeably wider, and that width is the
+#         honest cost of the extra certainty.
+# A wider range is not a worse forecast. It is the same forecast, told honestly.
+
 CALIBRATION_ORIGINS = 3
 # How many past slices to check against. More is steadier and slower.
 # Sensible range: 2 to 6.
