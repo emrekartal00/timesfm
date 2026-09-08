@@ -63,6 +63,10 @@ ap.add_argument("--checkpoint",
                 default=os.environ.get("TIMESFM_CHECKPOINT",
                                        "google/timesfm-3.0-pytorch"))
 ap.add_argument("--device", default=None, help="cuda / mps / cpu (default: auto)")
+ap.add_argument("--strategy", default="auto",
+                choices=["auto", "multichannel", "signed-log", "raw"],
+                help="how to model a signed target. auto = multichannel for "
+                     "net_change, raw otherwise")
 ap.add_argument("--no-covariates", action="store_true",
                 help="skip the calendar covariates")
 ap.add_argument("--no-backtest", action="store_true")
@@ -222,6 +226,20 @@ except Exception as exc:
   print(" this is a statsmodels/pandas version clash, not a problem with your data")
 
 
+# ------------------------------------------------- statement-day detection --
+# Payments land on statement dates, which repeat on the same days of the month.
+# That is deterministic and therefore knowable for the future, so it makes a
+# strong future covariate. Detected from history rather than hard-coded.
+STATEMENT_DAYS = set()
+if (payments > 0).any():
+  by_dom = pd.Series(payments.to_numpy(), index=payments.index).groupby(
+      payments.index.day).apply(lambda g: float((g > 0).mean()))
+  STATEMENT_DAYS = set(by_dom[by_dom > 0.25].index.tolist())
+  if STATEMENT_DAYS:
+    print(f"\npayments recur on days of month: {sorted(STATEMENT_DAYS)}")
+    print("  -> added as a future covariate, which sharpens payment timing")
+
+
 # ----------------------------------------------------------------- covariates --
 def calendar_covariates(index):
   """Calendar features for the given dates, shape (n_features, len(index)).
@@ -241,6 +259,8 @@ def calendar_covariates(index):
       (dow >= 5).astype(float),                      # weekend flag
       (index.is_month_end).astype(float),
       (index.is_month_start).astype(float),
+      np.isin(index.day.to_numpy(), list(STATEMENT_DAYS)).astype(float)
+      if STATEMENT_DAYS else np.zeros(len(index)),
   ]).astype(np.float32)
 
 
@@ -262,23 +282,59 @@ model = TimesFM3Forecaster(ModelConfig(
 print("loaded")
 
 
-def forecast(history_index, history_values, horizon):
-  """One forecast. Returns (p50, quantiles) with the calendar as covariates."""
+STRATEGY = args.strategy
+if STRATEGY == "auto":
+  # A signed series with big negative payment spikes is bimodal: one process
+  # for purchases, another for payments. Forecasting them as separate channels
+  # (plus the balance, since payment size depends on what has accumulated)
+  # measured better on every metric than modelling the signed series directly.
+  STRATEGY = "multichannel" if args.target == "net_change" else "raw"
+print(f"strategy: {STRATEGY}")
+
+
+def _predict(contexts, index, horizon):
+  """Raw call into TimesFM with the calendar attached."""
   kwargs = {}
   if not args.no_covariates:
-    future_index = pd.date_range(history_index[-1] + pd.Timedelta(days=1),
+    future_index = pd.date_range(index[-1] + pd.Timedelta(days=1),
                                  periods=horizon, freq="D")
-    both = history_index.append(future_index)
     # past_future covariates must span context + horizon, not just the horizon.
-    kwargs["past_future_covariates"] = [calendar_covariates(both)]
-  out = list(model.predict_batch(
-      [history_values.astype(np.float32)],
+    kwargs["past_future_covariates"] = [calendar_covariates(index.append(future_index))]
+  return list(model.predict_batch(
+      contexts,
       horizon=horizon,
       return_quantiles=True,
       make_positive=(args.target == "purchases"),   # usage cannot be negative
       padding_mode="edge",
       **kwargs,
   ))[0]
+
+
+def forecast(history_index, history_values, horizon):
+  """One forecast. Returns (p50, quantiles), honouring the chosen strategy."""
+  if STRATEGY == "multichannel":
+    end = len(history_index)
+    channels = np.stack([
+        purchases.to_numpy()[:end],
+        payments.to_numpy()[:end],
+        balance.to_numpy()[:end],
+    ]).astype(np.float32)
+    out = _predict([channels], history_index, horizon)
+    # net = purchases - payments. For the interval, the upper bound of a
+    # difference pairs the upper bound of the first term with the LOWER bound
+    # of the second, hence the reversed quantile axis on payments.
+    point = out.forecast[0] - out.forecast[1]
+    quant = out.quantiles[0] - out.quantiles[1][:, ::-1]
+    return point, np.sort(quant, axis=-1)
+
+  if STRATEGY == "signed-log":
+    # Compresses the spikes so they stop dominating; inverted after.
+    warped = np.sign(history_values) * np.log1p(np.abs(history_values))
+    out = _predict([warped.astype(np.float32)], history_index, horizon)
+    inv = lambda z: np.sign(z) * np.expm1(np.abs(z))
+    return inv(out.forecast), inv(out.quantiles)
+
+  out = _predict([history_values.astype(np.float32)], history_index, horizon)
   return out.forecast, out.quantiles
 
 
@@ -304,11 +360,29 @@ if not args.no_backtest and len(series) > args.horizon * 3:
     ok = denom > 0
     return float(np.mean(np.abs(a[ok] - b[ok]) / denom[ok]) * 100) if ok.any() else float("nan")
 
+  if (actual < 0).any():
+    print("note: sMAPE is unreliable on a signed series that crosses zero.")
+    print("      Judge this one on MAE and pinball loss.\n")
   print(f"{'model':<18}{'MAE':>14}{'sMAPE':>10}")
   print(f"{'TimesFM':<18}{mae(actual, pred):>14,.0f}{smape(actual, pred):>9.1f}%")
   print(f"{'seasonal naive':<18}{mae(actual, naive):>14,.0f}{smape(actual, naive):>9.1f}%")
   print(f"{'flat mean':<18}{mae(actual, np.full(args.horizon, train.mean())):>14,.0f}"
         f"{smape(actual, np.full(args.horizon, train.mean())):>9.1f}%")
+
+  # A signed series lives or dies on the spikes, so score them separately --
+  # an average over all days hides whether payment days were caught at all.
+  if (actual < 0).any():
+    spike = actual < 0
+    print(f"\n  on {spike.sum()} payment day(s):     MAE {mae(actual[spike], pred[spike]):>12,.0f}")
+    print(f"  on {(~spike).sum()} ordinary days:    MAE {mae(actual[~spike], pred[~spike]):>12,.0f}")
+
+  # Pinball loss scores the whole predictive distribution, not just the point.
+  levels = np.array([.1, .2, .3, .4, .5, .6, .7, .8, .9])
+  _, bt_q = forecast(train.index, train.to_numpy(), args.horizon)
+  err = actual[:, None] - bt_q
+  print(f"  pinball loss (all quantiles): {np.mean(np.maximum(levels * err, (levels - 1) * err)):>10,.0f}")
+  inside = np.mean((actual >= bt_q[:, 0]) & (actual <= bt_q[:, 8]))
+  print(f"  80% interval actually covered: {inside:.0%} of days (target 80%)")
 
   better = mae(actual, pred) < mae(actual, naive)
   print(f"\nTimesFM beats seasonal naive: {better}")
