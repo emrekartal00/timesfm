@@ -1,6 +1,6 @@
 # Forecasting your own data
 
-Guide to the three forecasting files in this fork. Everything here was measured
+Guide to the forecasting files in this fork. Everything here was measured
 on real runs, not assumed.
 
 | file | what it is |
@@ -18,12 +18,22 @@ of the data preparation, their numbers would quietly stop being comparable.
 
 ## 1. Install
 
+In Spyder or any IPython console:
+
+```python
+%pip install -e .[torch]
+%pip install -r requirements-forecasting.txt
+```
+
+In a terminal:
+
 ```bash
 python -m pip install -e ".[torch]"                      # TimesFM itself
 python -m pip install -r requirements-forecasting.txt    # everything else
 ```
 
-Use `python -m pip`, not plain `pip`: it guarantees the packages land in the
+`%pip` installs into the console you are actually running, which is what you
+want. In a terminal use `python -m pip`, not plain `pip`: it guarantees the packages land in the
 same Python you run the scripts with, which is the usual reason an install looks
 fine and the script still says `No module named ...`.
 
@@ -43,20 +53,30 @@ of the packages; 3.11 or 3.12 is the safest choice today.
 
 ## 2. Quick start
 
-```bash
-python credit_card_forecast.py --excel yourfile.xlsx
-```
-
-### From Spyder or an IPython console
-
-Use `%run`, which handles the arguments and the import path for you:
+In Spyder or any IPython console, use `%run`. It passes the arguments through
+and sets the import path for you:
 
 ```python
 %run credit_card_forecast.py --excel yourfile.xlsx --target growth --rolling 6
 %run sweep.py --excel yourfile.xlsx --origins 6
 ```
 
-To install packages from the console, use `%pip install -r requirements-forecasting.txt`.
+In a terminal the same commands drop the `%`:
+
+```bash
+python credit_card_forecast.py --excel yourfile.xlsx --target growth --rolling 6
+python sweep.py --excel yourfile.xlsx --origins 6
+```
+
+Everything below is written with the terminal form. To use it in Spyder, put
+`%run` in front and drop `python`.
+
+Give the full path if the spreadsheet is somewhere else, keeping the `r` before
+the quote on Windows:
+
+```python
+%run credit_card_forecast.py --excel r"C:\Users\you\Desktop\cards.xlsx" --target growth
+```
 
 ## 3. What the script does to your data
 
@@ -328,7 +348,18 @@ dropped from the CLI; the implementation is in git history at commit `a04b108`.
 ## 9. Troubleshooting
 
 **`No module named timesfm3`** — you cloned but did not install, or your IDE
-uses a different interpreter. See `SETUP-LOCAL.md`.
+uses a different interpreter. Install from inside the console with
+`%pip install -e .[torch]`, which uses the Python you are actually running. See
+`SETUP-LOCAL.md`.
+
+**`failed to activate VS environment: no vswhere.exe`** — pip found no
+ready-built package for your Python and tried to compile one. Do not install
+Visual Studio; see the Install section above.
+
+**`CalledProcessError` from `subprocess.py` with no explanation** — a
+`subprocess.run(..., check=True)` call discarded pip's message. Use `%pip` in
+the console instead, or pass `capture_output=True, text=True` and print
+`.stdout` and `.stderr`.
 
 **Detected the wrong columns** — check the first printed section, then pass
 `--date-col` / `--balance-col`.
