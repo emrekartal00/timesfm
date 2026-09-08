@@ -1,106 +1,77 @@
 """
-Forecast credit-card usage from an Excel sheet with TimesFM 3.0, and report the
-seasonality in the history.
+Forecast credit-card usage from an Excel sheet, and report the seasonality in
+the history.
 
     python credit_card_forecast.py --excel cards.xlsx
-    python credit_card_forecast.py --excel cards.xlsx --currency TRY --horizon 30
-    python credit_card_forecast.py --excel cards.xlsx --target balance --plot
+    python credit_card_forecast.py --excel cards.xlsx --target net_change --growth-col growth
+    python credit_card_forecast.py --excel cards.xlsx --model gbm --rolling 6 --plot
 
-Expects a sheet with at least a date column and a balance column. A currency
-column is used to split the data if present. Everything else (day of month,
-year, yearmonth, day of week, growth) is RECOMPUTED from the dates and the
-balance rather than trusted, since those columns are derived anyway and a stale
-fill-down or an inserted row is a common source of silent error. A `growth`
-column found in the sheet is checked against the recomputed version and the
-agreement reported; --growth-col makes it authoritative instead.
+All the data handling and both models live in cc_lib.py, which sweep.py also
+uses, so the two scripts can never drift apart and report incomparable numbers.
 
-WHAT IT DOES, AND WHY
----------------------
-1. Puts the data on a regular grid. TimesFM never sees your dates; it assumes
-   every step is one period, so gapped rows silently corrupt the weekly
-   pattern. The default grid is business days -- one step per trading day,
-   weekends dropped rather than zero-filled, so a Monday step carries the
-   weekend's activity exactly as a row-to-row `growth` column does.
-
-   Which grid is right depends on the export, so it is detected rather than
-   assumed. If the weekend rows carry real spending, they are kept -- dropping
-   them would discard real money. If they are flat padding, they are dropped,
-   because zeros every week dilute the series and smear the statement spike:
-   on a rolling six-window backtest that was worth 37% of mean MAE and 72% of
-   payment-day MAE. Override with --grid business or --grid calendar.
-
-2. Separates the flow from the stock. Balance is a level. Usage is the daily
-   change in that level. They are different forecasting problems and mixing
-   them up is the most common mistake here.
-
-3. Splits purchases from payments. The daily change on a credit card is
-   purchases minus payments, and a statement payment is a single huge negative
-   spike. Left in, those spikes dominate the model. `--target purchases`
-   (the default) keeps only the positive part, which is what "usage" means.
-
-4. Feeds the calendar to the model as covariates. Day of week and day of month
-   are known for the future, so they go in as past_future_covariates -- this is
-   the main reason to use TimesFM 3.0 over 2.5 for this data.
-
-5. Backtests before forecasting. An unvalidated forecast is a guess. The last
-   `horizon` days are held out and compared against seasonal-naive.
+See FORECASTING.md for the full guide.
 """
 
 import argparse
-import os
-import sys
 
 import numpy as np
 import pandas as pd
 
+import cc_lib as L
 
-# ---------------------------------------------------------------- arguments --
+DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
 ap = argparse.ArgumentParser(description=__doc__,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument("--excel", required=True, help="path to the .xlsx file")
-ap.add_argument("--sheet", default=0, help="sheet name or index (default: first)")
-ap.add_argument("--date-col", default=None, help="override date column name")
-ap.add_argument("--balance-col", default=None, help="override balance column name")
-ap.add_argument("--currency-col", default=None, help="override currency column name")
-ap.add_argument("--currency", default=None,
-                help="which currency to model (default: the one with most rows)")
-ap.add_argument("--target", default="purchases",
-                choices=["purchases", "net_change", "balance"],
-                help="purchases = usage (default); net_change = purchases minus "
-                     "payments; balance = the outstanding level")
-ap.add_argument("--horizon", type=int, default=30, help="days to forecast")
-ap.add_argument("--checkpoint",
-                default=os.environ.get("TIMESFM_CHECKPOINT",
-                                       "google/timesfm-3.0-pytorch"))
-ap.add_argument("--device", default=None, help="cuda / mps / cpu (default: auto)")
-ap.add_argument("--grid", default="auto",
-                choices=["auto", "business", "calendar"],
-                help="auto (default) keeps weekends only if they carry real "
-                     "activity. business = weekdays only. calendar = all 7 days")
-ap.add_argument("--growth-col", default=None,
-                help="use this column as the daily change instead of "
-                     "recomputing it from the balance")
-ap.add_argument("--model", default="both",
-                choices=["timesfm", "gbm", "minirocket", "both", "all"],
-                help="timesfm = the foundation model; gbm = gradient-boosted "
-                     "trees on lag and calendar features, the standard strong "
-                     "baseline for daily series; minirocket = random "
-                     "convolutional kernels plus ridge; both (default) = "
-                     "timesfm + gbm; all = every model")
-ap.add_argument("--strategy", default="auto",
-                choices=["auto", "multichannel", "signed-log", "raw"],
-                help="how to model a signed target. auto = multichannel for "
-                     "net_change, raw otherwise")
-ap.add_argument("--no-covariates", action="store_true",
-                help="skip the calendar covariates")
-ap.add_argument("--no-backtest", action="store_true")
-ap.add_argument("--rolling", type=int, default=0, metavar="N",
-                help="evaluate over N rolling origins instead of one holdout. "
-                     "One holdout is a single sample and rankings flip on it; "
-                     "5-8 gives a conclusion worth acting on")
-ap.add_argument("--plot", action="store_true", help="write forecast.png")
-ap.add_argument("--out", default="forecast.csv")
+src = ap.add_argument_group("input")
+src.add_argument("--excel", required=True, help="path to the .xlsx file")
+src.add_argument("--sheet", default=0, help="sheet name or index (default: first)")
+src.add_argument("--date-col", default=None, help="override the date column")
+src.add_argument("--balance-col", default=None, help="override the balance column")
+src.add_argument("--currency-col", default=None, help="override the currency column")
+src.add_argument("--currency", default=None, help="which currency to model")
+src.add_argument("--growth-col", default=None, help="name of the growth column")
+src.add_argument("--use-growth", action="store_true",
+                 help="trust the sheet's growth column instead of recomputing")
+src.add_argument("--grid", default="auto", choices=["auto", "business", "calendar"],
+                 help="auto (default) keeps weekends only if they carry activity")
+
+what = ap.add_argument_group("what to forecast")
+what.add_argument("--target", default="purchases",
+                  choices=["purchases", "net_change", "balance"])
+what.add_argument("--horizon", type=int, default=30, help="steps ahead")
+
+mdl = ap.add_argument_group("models")
+mdl.add_argument("--model", default="both", choices=["timesfm", "gbm", "both"])
+mdl.add_argument("--strategy", default="auto",
+                 choices=["auto", "multichannel", "signed-log", "raw"],
+                 help="TimesFM only: how to handle a signed target")
+mdl.add_argument("--no-covariates", action="store_true", help="TimesFM only")
+mdl.add_argument("--znorm", action="store_true", help="TimesFM only")
+mdl.add_argument("--context", type=int, default=None,
+                 help="TimesFM only: cap the history fed to the model")
+mdl.add_argument("--checkpoint", default=None, help="TimesFM weights path or repo id")
+mdl.add_argument("--device", default=None, help="cuda / mps / cpu")
+mdl.add_argument("--num-leaves", type=int, default=31, help="GBM only")
+mdl.add_argument("--learning-rate", type=float, default=0.05, help="GBM only")
+mdl.add_argument("--rounds", type=int, default=300, help="GBM only")
+
+out = ap.add_argument_group("evaluation and output")
+out.add_argument("--rolling", type=int, default=0, metavar="N",
+                 help="score over N rolling origins instead of one holdout")
+out.add_argument("--no-backtest", action="store_true")
+out.add_argument("--plot", action="store_true", help="write forecast.png")
+out.add_argument("--out", default="forecast.csv")
 args = ap.parse_args()
+
+MODELS = ["timesfm", "gbm"] if args.model == "both" else [args.model]
+tf_params = L.TimesFMParams(
+    strategy=args.strategy, covariates=not args.no_covariates, znorm=args.znorm,
+    context=args.context, device=args.device,
+    **({"checkpoint": args.checkpoint} if args.checkpoint else {}))
+gbm_params = L.GBMParams(num_leaves=args.num_leaves,
+                         learning_rate=args.learning_rate, rounds=args.rounds)
+PARAMS = {"timesfm": tf_params, "gbm": gbm_params}
 
 
 def rule(title):
@@ -108,665 +79,131 @@ def rule(title):
 
 
 # ------------------------------------------------------------------- loading --
-rule("1. LOADING")
+rule("1. LOADING AND GRID")
+data = L.load(args.excel, sheet=args.sheet, date_col=args.date_col,
+              balance_col=args.balance_col, currency_col=args.currency_col,
+              currency=args.currency, growth_col=args.growth_col,
+              use_growth=args.use_growth, grid=args.grid)
+for note in data.notes:
+  print(f"  {note}")
+print(f"\ngrid: {data.grid_mode} -> {len(data.index):,} steps "
+      f"({data.index[0]:%Y-%m-%d} to {data.index[-1]:%Y-%m-%d})")
+print(f"  mean change per step : {data.net_change.mean():,.2f}")
+print(f"  mean daily purchases : {data.purchases.mean():,.2f}")
+print(f"  steps with a payment : {(data.payments > 0).sum():,} "
+      f"(largest {data.payments.max():,.2f})")
 
-df = pd.read_excel(args.excel, sheet_name=args.sheet)
-print(f"{args.excel}: {len(df):,} rows, {len(df.columns)} columns")
-print(f"columns: {list(df.columns)}")
-
-
-def find_col(override, *keywords):
-  """Locate a column by name fragment, case-insensitively."""
-  if override:
-    if override not in df.columns:
-      raise SystemExit(f"No column named {override!r}. Available: {list(df.columns)}")
-    return override
-  for col in df.columns:
-    name = str(col).strip().lower()
-    if any(k in name for k in keywords):
-      return col
-  return None
-
-
-date_col = find_col(args.date_col, "date", "tarih")
-bal_col = find_col(args.balance_col, "balance", "bakiye", "amount", "tutar")
-cur_col = find_col(args.currency_col, "currency", "curr", "para", "doviz", "döviz")
-
-if date_col is None or bal_col is None:
-  raise SystemExit(
-      "Could not identify the date and balance columns automatically.\n"
-      f"Found: {list(df.columns)}\n"
-      "Pass --date-col and --balance-col explicitly."
-  )
-print(f"\ndate     -> {date_col!r}")
-print(f"balance  -> {bal_col!r}")
-print(f"currency -> {cur_col!r}" if cur_col else "currency -> none found")
-
-df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-bad_dates = df[date_col].isna().sum()
-if bad_dates:
-  print(f"\ndropping {bad_dates} rows with unparseable dates")
-  df = df.dropna(subset=[date_col])
-
-# One currency at a time. Mixing currencies into one series is meaningless --
-# the numbers are not comparable and the model would be fitting an exchange rate.
-if cur_col is not None and df[cur_col].nunique() > 1:
-  counts = df[cur_col].value_counts()
-  print(f"\n{df[cur_col].nunique()} currencies present:")
-  for k, v in counts.items():
-    print(f"    {k}: {v:,} rows")
-  chosen = args.currency or counts.index[0]
-  if chosen not in set(df[cur_col]):
-    raise SystemExit(f"Currency {chosen!r} not in the sheet.")
-  print(f"modelling {chosen!r} (use --currency to pick another)")
-  df = df[df[cur_col] == chosen]
-elif cur_col is not None:
-  chosen = df[cur_col].iloc[0]
-  print(f"single currency: {chosen}")
-
-df = df.sort_values(date_col).drop_duplicates(subset=[date_col], keep="last")
-df[bal_col] = pd.to_numeric(df[bal_col], errors="coerce")
-
-
-# ------------------------------------------------------------ regular grid --
-rule("2. PUTTING IT ON A REGULAR GRID")
-
-span = (df[date_col].max() - df[date_col].min()).days + 1
-weekend_rows = int((df[date_col].dt.dayofweek >= 5).sum())
-print(f"{len(df):,} rows spanning {span:,} calendar days "
-      f"({df[date_col].min():%Y-%m-%d} to {df[date_col].max():%Y-%m-%d})")
-print(f"rows falling on a weekend: {weekend_rows:,}")
-
-s_raw = df.set_index(date_col)[bal_col]
-
-# TimesFM never sees dates -- it assumes every step is one period. So the rows
-# have to sit on a regular grid before anything else is true.
-#
-# Two grids are defensible for card data, and which is better is an empirical
-# question, not a matter of taste. On a rolling six-window backtest the
-# business grid won five, cutting mean MAE by 37% and payment-day MAE by 72%.
-# The single window it lost contained no payments at all. Weekend zero-rows
-# dilute the series and smear the statement-day spike across neighbours, so
-# business days are the default here.
-# Whether to keep weekends is not a matter of taste, and it is not the same
-# answer for every export. It depends on one fact about the data: do the
-# weekend rows carry real spending, or are they padding?
-#
-#   no weekend rows at all      -> nothing to drop. A Monday step already
-#                                  carries the weekend, exactly as a row-to-row
-#                                  growth column does.
-#   weekend rows, but flat      -> zeros every week dilute the series and smear
-#                                  the statement spike. Drop them.
-#   weekend rows with activity  -> the card is genuinely used at weekends and
-#                                  the bank posts daily. Dropping them would
-#                                  throw away real money. Keep all 7 days.
-grid_mode = args.grid
-if grid_mode == "auto":
-  if weekend_rows == 0:
-    grid_mode = "business"
-    print("\nauto: no weekend rows in the sheet -> business days")
-  else:
-    wk = s_raw.diff().loc[s_raw.index.dayofweek >= 5]
-    scale = max(s_raw.diff().abs().median(), 1e-9)
-    active = float((wk.abs() > 0.05 * scale).mean())
-    if active > 0.10:
-      grid_mode = "calendar"
-      print(f"\nauto: {weekend_rows:,} weekend rows and {active:.0%} of them "
-            f"carry real movement")
-      print("  -> keeping all 7 days; dropping them would discard real spending")
-    else:
-      grid_mode = "business"
-      print(f"\nauto: {weekend_rows:,} weekend rows but only {active:.0%} "
-            f"carry movement")
-      print("  -> they are padding; dropping them so the weekly pattern is cleaner")
-
-if grid_mode == "business":
-  grid = pd.bdate_range(s_raw.index.min(), s_raw.index.max())
-  print(f"grid: business days -> {len(grid):,} steps "
-        f"(one step = one trading day)")
-  print("  weekends are dropped rather than zero-filled; a Monday step")
-  print("  therefore carries the whole weekend's activity, exactly like your")
-  print("  growth column does")
-else:
-  grid = pd.date_range(s_raw.index.min(), s_raw.index.max(), freq="D")
-  print(f"grid: every calendar day -> {len(grid):,} steps")
-
-# A balance is a stock: on a day with no record it simply has not changed.
-balance = s_raw.reindex(s_raw.index.union(grid)).ffill().reindex(grid)
-missing = int(balance.isna().sum())
-if missing:
-  balance = balance.bfill()
-  print(f"  {missing} leading step(s) had no balance yet; back-filled")
-
-# The daily change. Prefer the sheet's own column if asked for, but check it.
-recomputed = balance.diff().fillna(0.0)
-growth_col = args.growth_col or find_col(None, "growth", "artis", "artış", "degisim")
-if growth_col is not None and growth_col in df.columns:
-  supplied = pd.to_numeric(df.set_index(date_col)[growth_col], errors="coerce")
-  supplied = supplied.reindex(grid)
-  both_known = supplied.notna() & recomputed.notna()
-  if both_known.sum():
-    delta = (supplied[both_known] - recomputed[both_known]).abs()
-    scale = max(recomputed.abs().mean(), 1e-9)
-    agree = float((delta < 0.01 * scale).mean())
-    print(f"\nfound growth column {growth_col!r}: agrees with "
-          f"balance.diff() on {agree:.0%} of steps")
-    if args.growth_col:
-      net_change = supplied.fillna(recomputed)
-      print("  using the sheet's column, as requested (--growth-col)")
-      if agree < 0.95:
-        print("  WARNING: it disagrees on more than 5% of steps. A stale")
-        print("  fill-down or an inserted row will do that. The recomputed")
-        print("  version is the safer choice unless you know why they differ.")
-    else:
-      net_change = recomputed
-      print("  using the recomputed version (pass --growth-col to override);")
-      print("  recomputing is immune to stale formulas and inserted rows")
-  else:
-    net_change = recomputed
-else:
-  net_change = recomputed
-
-net_change = net_change.fillna(0.0)
-purchases = net_change.clip(lower=0.0)      # usage: the positive part only
-payments = (-net_change).clip(lower=0.0)
-
-print(f"\n  mean change per step  : {net_change.mean():,.2f}")
-print(f"  mean daily purchases  : {purchases.mean():,.2f}")
-print(f"  steps with a payment  : {(payments > 0).sum():,} "
-      f"(largest {payments.max():,.2f})")
-
-series = {"purchases": purchases, "net_change": net_change, "balance": balance}[args.target]
-series.name = args.target
+series = data.target(args.target)
 print(f"\ntarget: {args.target}")
 
 
-def future_index(last, n):
-  """The next n steps on whichever grid is in use."""
-  if grid_mode == "business":
-    return pd.bdate_range(last + pd.Timedelta(days=1), periods=n)
-  return pd.date_range(last + pd.Timedelta(days=1), periods=n, freq="D")
-
-
 # -------------------------------------------------------------- seasonality --
-rule("3. SEASONALITY IN THE HISTORY")
-print("TimesFM does not report seasonality -- it only exploits it. This section")
-print("is ordinary statistics, so you can see the patterns the model is using.\n")
+rule("2. SEASONALITY IN THE HISTORY")
+print("TimesFM only exploits seasonality, it never reports it. This section is")
+print("ordinary statistics, so you can see the patterns the models are using.\n")
 
 frame = pd.DataFrame({"value": series})
-frame["dow"] = frame.index.dayofweek
-frame["dom"] = frame.index.day
-frame["month"] = frame.index.month
-
-DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 overall = frame["value"].mean()
-
-print("By day of week (index = share of the average day):")
-for d, grp in frame.groupby("dow")["value"]:
+print("By day of week (index = share of the average step):")
+for d, grp in frame.groupby(frame.index.dayofweek)["value"]:
   idx = grp.mean() / overall if overall else float("nan")
-  bar = "#" * int(max(0, min(40, idx * 20)))
-  print(f"  {DAYS[d]}  {grp.mean():>12,.0f}  {idx:>5.2f}  {bar}")
+  print(f"  {DAYS[d]}  {grp.mean():>12,.0f}  {idx:>5.2f}  {'#' * int(max(0, min(40, idx * 20)))}")
 
 print("\nBy month:")
-for m, grp in frame.groupby("month")["value"]:
-  idx = grp.mean() / overall if overall else float("nan")
-  print(f"  {m:>2}   {grp.mean():>12,.0f}  {idx:>5.2f}")
+for m, grp in frame.groupby(frame.index.month)["value"]:
+  print(f"  {m:>2}   {grp.mean():>12,.0f}  {grp.mean() / overall:>5.2f}")
 
-print("\nStrongest days of the month (index vs average):")
-dom = (frame.groupby("dom")["value"].mean() / overall).sort_values(ascending=False)
+print("\nStrongest days of the month:")
+dom = (frame.groupby(frame.index.day)["value"].mean() / overall).sort_values(ascending=False)
 for d, idx in dom.head(5).items():
   print(f"  day {d:>2}  {idx:>5.2f}")
 
 try:
   from statsmodels.tsa.seasonal import STL
   from statsmodels.tsa.stattools import acf
-
   values = series.astype(float).to_numpy()
   lags = acf(values, nlags=min(40, len(values) // 3), fft=True)
-  peaks = sorted(range(1, len(lags)), key=lambda i: -abs(lags[i]))[:5]
-  print("\nAutocorrelation peaks (lag in days -> correlation):")
-  for p in peaks:
+  print("\nAutocorrelation peaks (lag -> correlation):")
+  for p in sorted(range(1, len(lags)), key=lambda i: -abs(lags[i]))[:5]:
     print(f"  lag {p:>3}  {lags[p]:+.3f}")
-
-  if len(values) >= 14:
-    stl = STL(pd.Series(values, index=series.index), period=7, robust=True).fit()
-    var = np.var(stl.resid + stl.seasonal)
-    strength = max(0.0, 1 - np.var(stl.resid) / var) if var > 0 else 0.0
-    print(f"\nWeekly seasonal strength: {strength:.2f}  "
-          f"({'strong' if strength > 0.6 else 'moderate' if strength > 0.3 else 'weak'})")
-    print("  0 = no weekly pattern, 1 = entirely weekly")
-except ImportError:
-  print("\n(statsmodels not installed; skipping ACF and STL)")
+  period = 5 if data.grid_mode == "business" else 7
+  stl = STL(pd.Series(values, index=series.index), period=period, robust=True).fit()
+  var = np.var(stl.resid + stl.seasonal)
+  strength = max(0.0, 1 - np.var(stl.resid) / var) if var > 0 else 0.0
+  print(f"\nWeekly seasonal strength: {strength:.2f} "
+        f"({'strong' if strength > 0.6 else 'moderate' if strength > 0.3 else 'weak'})")
 except Exception as exc:
-  # statsmodels 0.14.x is not compatible with pandas 3.x and raises at import.
-  # That is an environment problem, not a data problem -- the weekday/month
-  # tables above are computed with pandas alone and are unaffected.
   print(f"\n(ACF/STL unavailable: {type(exc).__name__}: {exc})")
-  print(" this is a statsmodels/pandas version clash, not a problem with your data")
 
 
-# ------------------------------------------------- statement-day detection --
-# Payments land on statement dates, which repeat on the same days of the month.
-# That is deterministic and therefore knowable for the future, so it makes a
-# strong future covariate. Detected from history rather than hard-coded.
-STATEMENT_DAYS = set()
-if (payments > 0).any():
-  by_dom = pd.Series(payments.to_numpy(), index=payments.index).groupby(
-      payments.index.day).apply(lambda g: float((g > 0).mean()))
-  STATEMENT_DAYS = set(by_dom[by_dom > 0.25].index.tolist())
-  if STATEMENT_DAYS:
-    print(f"\npayments recur on days of month: {sorted(STATEMENT_DAYS)}")
-    print("  -> added as a future covariate, which sharpens payment timing")
-
-
-# ----------------------------------------------------------------- covariates --
-def calendar_covariates(index):
-  """Calendar features for the given dates, shape (n_features, len(index)).
-
-  All of these are known arbitrarily far into the future, which is exactly what
-  past_future_covariates requires. Day of week and day of month are encoded as
-  sine/cosine pairs rather than raw integers: as an integer, Sunday=7 and
-  Monday=1 look maximally far apart when they are adjacent.
-  """
-  dow = index.dayofweek.to_numpy()
-  dom = index.day.to_numpy()
-  month = index.month.to_numpy()
-  return np.stack([
-      np.sin(2 * np.pi * dow / 7), np.cos(2 * np.pi * dow / 7),
-      np.sin(2 * np.pi * dom / 31), np.cos(2 * np.pi * dom / 31),
-      np.sin(2 * np.pi * month / 12), np.cos(2 * np.pi * month / 12),
-      (dow >= 5).astype(float),                      # weekend flag
-      (index.is_month_end).astype(float),
-      (index.is_month_start).astype(float),
-      np.isin(index.day.to_numpy(), list(STATEMENT_DAYS)).astype(float)
-      if STATEMENT_DAYS else np.zeros(len(index)),
-  ]).astype(np.float32)
-
-
-# --------------------------------------------------------------------- model --
-rule("4. LOADING TIMESFM")
-
-import torch
-from timesfm3 import ModelConfig, TimesFM3Forecaster
-
-device = args.device or ("cuda" if torch.cuda.is_available()
-                         else "mps" if torch.backends.mps.is_available() else "cpu")
-print(f"device: {device}")
-print(f"checkpoint: {args.checkpoint}")
-model = TimesFM3Forecaster(ModelConfig(
-    checkpoint_path=args.checkpoint,
-    device=device,
-    per_core_batch_size=8,
-))
-print("loaded")
-
-
-STRATEGY = args.strategy
-if STRATEGY == "auto":
-  # A signed series with big negative payment spikes is bimodal: one process
-  # for purchases, another for payments. Forecasting them as separate channels
-  # (plus the balance, since payment size depends on what has accumulated)
-  # measured better on every metric than modelling the signed series directly.
-  STRATEGY = "multichannel" if args.target == "net_change" else "raw"
-print(f"strategy: {STRATEGY}")
-
-
-def _predict(contexts, index, horizon):
-  """Raw call into TimesFM with the calendar attached."""
-  kwargs = {}
-  if not args.no_covariates:
-    future = future_index(index[-1], horizon)
-    # past_future covariates must span context + horizon, not just the horizon.
-    kwargs["past_future_covariates"] = [calendar_covariates(index.append(future))]
-  return list(model.predict_batch(
-      contexts,
-      horizon=horizon,
-      return_quantiles=True,
-      make_positive=(args.target == "purchases"),   # usage cannot be negative
-      padding_mode="edge",
-      **kwargs,
-  ))[0]
-
-
-def forecast(history_index, history_values, horizon):
-  """One forecast. Returns (p50, quantiles), honouring the chosen strategy."""
-  if STRATEGY == "multichannel":
-    end = len(history_index)
-    channels = np.stack([
-        purchases.to_numpy()[:end],
-        payments.to_numpy()[:end],
-        balance.to_numpy()[:end],
-    ]).astype(np.float32)
-    out = _predict([channels], history_index, horizon)
-    # net = purchases - payments. For the interval, the upper bound of a
-    # difference pairs the upper bound of the first term with the LOWER bound
-    # of the second, hence the reversed quantile axis on payments.
-    point = out.forecast[0] - out.forecast[1]
-    quant = out.quantiles[0] - out.quantiles[1][:, ::-1]
-    return point, np.sort(quant, axis=-1)
-
-  if STRATEGY == "signed-log":
-    # Compresses the spikes so they stop dominating; inverted after.
-    warped = np.sign(history_values) * np.log1p(np.abs(history_values))
-    out = _predict([warped.astype(np.float32)], history_index, horizon)
-    inv = lambda z: np.sign(z) * np.expm1(np.abs(z))
-    return inv(out.forecast), inv(out.quantiles)
-
-  out = _predict([history_values.astype(np.float32)], history_index, horizon)
-  return out.forecast, out.quantiles
-
-
-# ----------------------------------------------------------- gradient boosting --
-# A direct multi-horizon gradient-boosted model. This is the recipe that wins
-# most daily-series forecasting competitions (M5 and friends), so it is the
-# honest thing to measure a foundation model against -- seasonal naive is a
-# floor, not a competitor.
-#
-# Design notes:
-#   * ONE model covering every horizon, with the step h as a feature. Uses far
-#     more training rows than fitting a separate model per step.
-#   * Features split in two. Lags and rolling statistics are computed at the
-#     forecast ORIGIN t, so they never see the future. Calendar features are
-#     computed for the TARGET date t+h, since a date is known in advance --
-#     the same information TimesFM gets through past_future_covariates.
-#   * Quantile objective at 0.1/0.5/0.9 gives a prediction interval that can be
-#     compared with TimesFM's on the same footing.
-
-LAGS = [1, 2, 3, 4, 5, 6, 7, 10, 14, 21, 28, 35]
-WINDOWS = [7, 14, 28]
-
-
-def _origin_features(values, t):
-  """Everything knowable at time t, using no data after t."""
-  past = values[: t + 1]
-  feats = [past[-lag] if len(past) >= lag else np.nan for lag in LAGS]
-  for w in WINDOWS:
-    window = past[-w:] if len(past) >= w else past
-    if len(window) == 0:
-      feats += [np.nan] * 4
-    else:
-      feats += [window.mean(), window.std(), window.min(), window.max()]
-  # How long since the last payment, and how big it was: the balance rebuilds
-  # after a statement, so both matter for what comes next.
-  neg = np.where(past < 0)[0]
-  feats.append(float(t - neg[-1]) if len(neg) else np.nan)
-  feats.append(float(past[neg[-1]]) if len(neg) else np.nan)
-  feats.append(float(past[-28:].sum()) if len(past) >= 28 else float(past.sum()))
-  return feats
-
-
-def _target_calendar(date, h):
-  """Everything knowable about the target date itself."""
-  return [
-      float(h),
-      float(date.dayofweek),
-      float(date.day),
-      float(date.month),
-      float(date.dayofweek >= 5),
-      float(date.is_month_end),
-      float(date.is_month_start),
-      float(date.day in STATEMENT_DAYS) if STATEMENT_DAYS else 0.0,
-  ]
-
-
-def gbm_forecast(index, values, horizon):
-  """Returns (point, quantiles) with quantiles at the 0.1/0.5/0.9 levels."""
-  import lightgbm as lgb
-
-  values = np.asarray(values, dtype=float)
-  n = len(values)
-  start = max(LAGS) + max(WINDOWS)          # need enough history for features
-  if n - start < horizon + 30:
-    raise RuntimeError("not enough history for the gradient-boosted model")
-
-  rows, targets = [], []
-  for t in range(start, n - 1):
-    origin = _origin_features(values, t)
-    for h in range(1, horizon + 1):
-      if t + h >= n:
-        break
-      rows.append(origin + _target_calendar(index[t + h], h))
-      targets.append(values[t + h])
-
-  X = np.asarray(rows, dtype=float)
-  y = np.asarray(targets, dtype=float)
-
-  future = future_index(index[-1], horizon)
-  last = _origin_features(values, n - 1)
-  X_future = np.asarray(
-      [last + _target_calendar(future[h - 1], h) for h in range(1, horizon + 1)],
-      dtype=float)
-
-  params = dict(objective="quantile", verbosity=-1, num_leaves=31,
-                learning_rate=0.05, min_data_in_leaf=20,
-                feature_fraction=0.9, bagging_fraction=0.9, bagging_freq=1)
-  preds = []
-  for alpha in (0.1, 0.5, 0.9):
-    booster = lgb.train({**params, "alpha": alpha},
-                        lgb.Dataset(X, label=y), num_boost_round=300)
-    preds.append(booster.predict(X_future))
-  quant = np.stack(preds, axis=1)
-  quant = np.sort(quant, axis=1)            # keep p10 <= p50 <= p90
-  return quant[:, 1], quant
-
-
-# ---------------------------------------------------------------- MiniRocket --
-# MINIROCKET (Dempster et al., 2021) is a fixed set of dilated convolutional
-# kernels with weights in {-1, 2}, pooled by the proportion of positive values.
-# It is near state of the art for time-series CLASSIFICATION and is extremely
-# fast. It is not natively a forecaster, so it is applied here by reduction:
-# each training example is a sliding window of the recent past, the transform
-# turns that window into ~10k features, and a ridge regression maps those
-# features to the next `horizon` values at once.
-#
-# Fairness note: the transform sees only the SHAPE of the window, so on its own
-# it knows nothing about dates. Calendar features for the window's end are
-# appended to the ridge input, and multi-output ridge learns separate weights
-# per step, so it can still express "the 14th, three steps out". Without that
-# it would be competing with one hand tied.
-#
-# Its interval is weaker than the other two models': ridge gives a point
-# estimate only, so p10/p90 come from the spread of its own training residuals
-# at each step rather than from a fitted quantile.
-MR_WINDOW = 128
-
-
-def _scale_features(window):
-  """MiniRocket pools by proportion-of-positive-values, which is deliberately
-  blind to magnitude -- ideal for classifying shapes, useless for predicting a
-  level. These put the scale back."""
-  return np.array([
-      window.mean(), window.std(), window[-1], window[-7:].mean(),
-      window[-7:].std(), window[-28:].mean(), window[-28:].sum(),
-      np.percentile(window, 10), np.percentile(window, 90),
-  ], dtype=np.float64)
-
-
-def _origin_calendar(date):
-  dow = np.zeros(7)
-  dow[date.dayofweek] = 1.0
-  return np.concatenate([dow, [
-      np.sin(2 * np.pi * date.day / 31), np.cos(2 * np.pi * date.day / 31),
-      np.sin(2 * np.pi * date.month / 12), np.cos(2 * np.pi * date.month / 12),
-      float(date.day in STATEMENT_DAYS) if STATEMENT_DAYS else 0.0,
-  ]])
-
-
-def minirocket_forecast(index, values, horizon):
-  from sklearn.linear_model import RidgeCV
-  from sktime.transformations.panel.rocket import MiniRocket
-
-  values = np.asarray(values, dtype=np.float32)
-  n = len(values)
-  window = min(MR_WINDOW, max(32, n // 4))
-  if n - window - horizon < 40:
-    raise RuntimeError("not enough history for MiniRocket")
-
-  origins = range(window - 1, n - horizon)
-  windows = np.stack([values[t - window + 1: t + 1] for t in origins])[:, None, :]
-  cal = np.stack([np.concatenate([_origin_calendar(index[t]),
-                                  _scale_features(values[t - window + 1: t + 1])])
-                  for t in origins])
-  Y = np.stack([values[t + 1: t + 1 + horizon] for t in origins])
-
-  transform = MiniRocket(num_kernels=10000, random_state=0).fit(windows)
-  X = np.nan_to_num(np.asarray(transform.transform(windows), dtype=np.float64))
-  X = np.hstack([X, cal])
-
-  # Fitting in a compressed (signed-log) target space was tried and was much
-  # worse: expm1 turns a small log-space error into a large one at the scale a
-  # payment spike lives at. Plain ridge on the raw target it is.
-  ridge = RidgeCV(alphas=np.logspace(-3, 5, 20)).fit(X, Y)
-
-  last = values[n - window:][None, None, :]
-  Xf = np.hstack([np.nan_to_num(np.asarray(transform.transform(last), dtype=np.float64)),
-                  np.concatenate([_origin_calendar(index[n - 1]),
-                                  _scale_features(values[n - window:])])[None, :]])
-  point = ridge.predict(Xf)[0]
-
-  # Interval from in-sample residual spread, per step ahead.
-  resid = Y - ridge.predict(X)
-  lo = np.percentile(resid, 10, axis=0)
-  hi = np.percentile(resid, 90, axis=0)
-  quant = np.sort(np.stack([point + lo, point, point + hi], axis=1), axis=1)
-  return point, quant
-
-
-# ------------------------------------------------------------------ backtest --
-MODELS = {"both": ["timesfm", "gbm"],
-          "all": ["timesfm", "gbm", "minirocket"]}.get(args.model, [args.model])
-LEVELS3 = np.array([0.1, 0.5, 0.9])
-
-
-def run_model(name, index, values, horizon):
-  """(point, quantiles at 0.1/0.5/0.9) for whichever model was asked for."""
-  if name == "timesfm":
-    point, quant = forecast(index, values, horizon)
-    return point, quant[:, [0, 4, 8]]      # match the others' three levels
-  if name == "minirocket":
-    return minirocket_forecast(index, values, horizon)
-  return gbm_forecast(index, values, horizon)
-
-
-def pinball(actual, quant, levels=LEVELS3):
-  err = actual[:, None] - quant
-  return float(np.mean(np.maximum(levels * err, (levels - 1) * err)))
-
-
-if not args.no_backtest and len(series) > args.horizon * 3:
-  rule(f"5. BACKTEST — HOLDING OUT THE LAST {args.horizon} STEPS")
-  if (series.iloc[-args.horizon:] < 0).any():
-    print("note: sMAPE is meaningless on a signed series that crosses zero,")
-    print("      so it is not reported. Judge on MAE and pinball loss.\n")
-
-  train = series.iloc[:-args.horizon]
-  test = series.iloc[-args.horizon:]
-  actual = test.to_numpy(dtype=float)
-  spike = actual < 0
-
-  # Seasonal naive is the floor, not a competitor -- kept only as a sanity line.
-  period = 5 if grid_mode == "business" else 7
-  naive = np.resize(train.to_numpy(dtype=float)[-period:], args.horizon)
-
+# ---------------------------------------------------------------- backtests --
+def show(df_scores, label):
+  print(f"\n{label}")
   print(f"{'model':<16}{'MAE':>12}{'pinball':>10}{'80% cov':>9}"
         f"{'MAE spike':>12}{'MAE other':>12}")
   print("-" * 71)
+  for name, row in df_scores.items():
+    print(f"{name:<16}{row['mae']:>12,.0f}{row['pinball']:>10,.0f}"
+          f"{row['coverage']:>8.0%}{row['mae_spike']:>12,.0f}{row['mae_other']:>12,.0f}")
 
+
+if not args.no_backtest and len(series) > args.horizon * 3:
+  rule(f"3. BACKTEST — LAST {args.horizon} STEPS HELD OUT")
+  if (series.iloc[-args.horizon:] < 0).any():
+    print("sMAPE is meaningless on a signed series crossing zero; not reported.")
+  upto = len(series) - args.horizon
+  actual = series.to_numpy()[upto:].astype(float)
   scores = {}
   for name in MODELS:
     try:
-      pred, quant = run_model(name, train.index, train.to_numpy(), args.horizon)
+      point, quant = L.forecast(name, data, args.target, upto, args.horizon, PARAMS[name])
+      scores[name] = L.score(actual, point, quant)
     except Exception as exc:
-      print(f"{name:<16}failed: {type(exc).__name__}: {exc}")
-      continue
-    cov = float(np.mean((actual >= quant[:, 0]) & (actual <= quant[:, 2])))
-    scores[name] = float(np.mean(np.abs(actual - pred)))
-    print(f"{name:<16}{scores[name]:>12,.0f}{pinball(actual, quant):>10,.0f}"
-          f"{cov:>8.0%}"
-          f"{(np.mean(np.abs(actual - pred)[spike]) if spike.any() else float('nan')):>12,.0f}"
-          f"{np.mean(np.abs(actual - pred)[~spike]):>12,.0f}")
-
-  print(f"{'seasonal naive':<16}{np.mean(np.abs(actual - naive)):>12,.0f}"
-        f"{'-':>10}{'-':>9}"
-        f"{(np.mean(np.abs(actual - naive)[spike]) if spike.any() else float('nan')):>12,.0f}"
-        f"{np.mean(np.abs(actual - naive)[~spike]):>12,.0f}")
-
-  if len(scores) > 1:
-    best = min(scores, key=scores.get)
-    other = [m for m in scores if m != best][0]
-    gap = (scores[other] - scores[best]) / scores[other] * 100
-    print(f"\nbest on this holdout: {best} "
-          f"({gap:.0f}% lower MAE than {other})")
-    print("One holdout is one sample. Rerun with a different --horizon before")
-    print("concluding one model is genuinely better on your data.")
-elif args.rolling and len(series) > args.horizon * (args.rolling + 3):
-  pass   # handled below
-else:
-  rule("5. BACKTEST — SKIPPED")
-  print("not enough history, or --no-backtest")
-
+      print(f"{name} failed: {type(exc).__name__}: {exc}")
+  period = 5 if data.grid_mode == "business" else 7
+  naive = np.resize(series.to_numpy()[:upto][-period:], args.horizon)
+  scores["seasonal naive"] = L.score(actual, naive, np.repeat(naive[:, None], 3, axis=1))
+  show(scores, "single holdout")
+  print("\nOne holdout is one sample. Use --rolling 6 before trusting a ranking.")
 
 if args.rolling:
-  rule(f"5b. ROLLING BACKTEST — {args.rolling} ORIGINS")
-  print("Each origin holds out the following {0} steps and refits from scratch.\n"
-        .format(args.horizon))
-  agg = {m: {"mae": [], "pin": [], "cov": []} for m in MODELS}
-  header = f"{'origin':<10}" + "".join(f"{m + ' MAE':>16}" for m in MODELS)
-  print(header)
-  print("-" * len(header))
-  for k in range(args.rolling):
-    cut = len(series) - (k + 1) * args.horizon
-    if cut < args.horizon * 2:
-      break
-    tr, te = series.iloc[:cut], series.iloc[cut:cut + args.horizon]
-    act = te.to_numpy(dtype=float)
-    line = f"{'-' + str((k + 1) * args.horizon) + ' steps':<10}"
-    for m in MODELS:
-      try:
-        pr, qt = run_model(m, tr.index, tr.to_numpy(), args.horizon)
-      except Exception:
-        line += f"{'failed':>16}"
-        continue
-      agg[m]["mae"].append(float(np.mean(np.abs(act - pr))))
-      agg[m]["pin"].append(pinball(act, qt))
-      agg[m]["cov"].append(float(np.mean((act >= qt[:, 0]) & (act <= qt[:, 2]))))
-      line += f"{agg[m]['mae'][-1]:>16,.0f}"
-    print(line)
-
-  print("\n" + f"{'model':<16}{'mean MAE':>12}{'mean pinball':>14}"
-        f"{'mean 80% cov':>14}{'wins':>7}")
-  print("-" * 63)
-  wins = {m: 0 for m in MODELS}
-  n = min(len(agg[m]["mae"]) for m in MODELS) if MODELS else 0
-  for i in range(n):
-    wins[min(MODELS, key=lambda m: agg[m]["mae"][i])] += 1
-  for m in MODELS:
-    if not agg[m]["mae"]:
-      continue
-    print(f"{m:<16}{np.mean(agg[m]['mae']):>12,.0f}"
-          f"{np.mean(agg[m]['pin']):>14,.0f}"
-          f"{np.mean(agg[m]['cov']):>13.0%}{wins[m]:>7}")
-  print("\nCoverage should sit near 80%. A model far below that is overconfident:")
-  print("its interval is too narrow and will under-warn you on a bad month.")
+  rule(f"4. ROLLING BACKTEST — {args.rolling} ORIGINS")
+  print("Each origin holds out the next block and refits from scratch.\n")
+  agg = {}
+  for name in MODELS:
+    try:
+      r = L.rolling_eval(name, data, args.target, args.horizon, args.rolling, PARAMS[name])
+      agg[name] = r
+      print(f"{name}: " + "  ".join(f"{v:,.0f}" for v in r.mae))
+    except Exception as exc:
+      print(f"{name} failed: {type(exc).__name__}: {exc}")
+  if agg:
+    show({k: v.mean(numeric_only=True) for k, v in agg.items()},
+         f"mean over {args.rolling} origins")
+    if len(agg) > 1:
+      wins = {k: 0 for k in agg}
+      n = min(len(v) for v in agg.values())
+      for i in range(n):
+        wins[min(agg, key=lambda k: agg[k].mae.iloc[i])] += 1
+      print("\nwins: " + ", ".join(f"{k} {v}" for k, v in wins.items()))
+    print("\nCoverage should sit near 80%. Well below means the interval is too")
+    print("narrow and will under-warn you in a bad month.")
 
 
-# ------------------------------------------------------------------ forecast --
-rule("6. FORECAST")
-
-future = future_index(series.index[-1], args.horizon)
-result = pd.DataFrame({"date": future,
-                       "day": [DAYS[d] for d in future.dayofweek]})
-
+# ----------------------------------------------------------------- forecast --
+rule("5. FORECAST")
+future = L.future_index(data.index[-1], args.horizon, data.grid_mode)
+result = pd.DataFrame({"date": future, "day": [DAYS[d] for d in future.dayofweek]})
 for name in MODELS:
   try:
-    point, quant = run_model(name, series.index, series.to_numpy(), args.horizon)
+    point, quant = L.forecast(name, data, args.target, len(series), args.horizon, PARAMS[name])
   except Exception as exc:
     print(f"{name} failed: {type(exc).__name__}: {exc}")
     continue
-  suffix = "" if len(MODELS) == 1 else f"_{name}"
-  result[f"forecast{suffix}"] = point
-  result[f"p10{suffix}"] = quant[:, 0]
-  result[f"p90{suffix}"] = quant[:, 2]
+  sfx = "" if len(MODELS) == 1 else f"_{name}"
+  result[f"forecast{sfx}"] = point
+  result[f"p10{sfx}"] = quant[:, 0]
+  result[f"p90{sfx}"] = quant[:, 2]
 
 fcols = [c for c in result.columns if c.startswith("forecast")]
 fmt = {c: "{:,.0f}".format for c in result.columns if c not in ("date", "day")}
@@ -774,44 +211,35 @@ print(result.head(14).to_string(index=False, formatters=fmt))
 if len(result) > 14:
   print(f"... {len(result) - 14} more rows")
 
-unit = "business days" if grid_mode == "business" else "days"
+unit = "business days" if data.grid_mode == "business" else "days"
 print(f"\nTotal over {args.horizon} {unit} "
       f"({future[0]:%Y-%m-%d} to {future[-1]:%Y-%m-%d}):")
 for c in fcols:
-  print(f"  {c:<20}{result[c].sum():>16,.0f}")
-
+  print(f"  {c:<22}{result[c].sum():>16,.0f}")
 print("\nBy week:")
-weekly = result.set_index("date")[fcols].resample("W").sum()
-print(weekly.to_string(formatters={c: "{:,.0f}".format for c in fcols}))
-
+print(result.set_index("date")[fcols].resample("W").sum().to_string(
+    formatters={c: "{:,.0f}".format for c in fcols}))
 print("\nBy month:")
-monthly = result.set_index("date")[fcols].resample("MS").sum()
-print(monthly.to_string(formatters={c: "{:,.0f}".format for c in fcols}))
+print(result.set_index("date")[fcols].resample("MS").sum().to_string(
+    formatters={c: "{:,.0f}".format for c in fcols}))
 
 result.to_csv(args.out, index=False)
 print(f"\nwritten: {args.out}")
 
 if args.plot:
-  try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(13, 5))
-    recent = series.iloc[-min(len(series), args.horizon * 4):]
-    ax.plot(recent.index, recent.to_numpy(), label="history", color="#3b6ea5", lw=1.2)
-    colors = {"forecast": "#c0392b", "forecast_timesfm": "#c0392b",
-              "forecast_gbm": "#2d8659"}
-    for c in fcols:
-      sfx = c.replace("forecast", "")
-      ax.plot(future, result[c], label=c, color=colors.get(c, "#7f8c8d"), lw=1.6)
-      ax.fill_between(future, result[f"p10{sfx}"], result[f"p90{sfx}"],
-                      color=colors.get(c, "#7f8c8d"), alpha=0.15)
-    ax.set_title(f"{args.target} — TimesFM 3.0, {args.horizon}-day forecast")
-    ax.legend()
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    fig.savefig("forecast.png", dpi=140)
-    print("written: forecast.png")
-  except ImportError:
-    print("matplotlib not installed; skipping plot")
+  import matplotlib
+  matplotlib.use("Agg")
+  import matplotlib.pyplot as plt
+  colors = {"forecast": "#c0392b", "forecast_timesfm": "#c0392b", "forecast_gbm": "#2d8659"}
+  fig, ax = plt.subplots(figsize=(13, 5))
+  recent = series.iloc[-min(len(series), args.horizon * 4):]
+  ax.plot(recent.index, recent.to_numpy(), label="history", color="#3b6ea5", lw=1.1)
+  for c in fcols:
+    sfx = c.replace("forecast", "")
+    ax.plot(future, result[c], label=c, color=colors.get(c, "#7f8c8d"), lw=1.6)
+    ax.fill_between(future, result[f"p10{sfx}"], result[f"p90{sfx}"],
+                    color=colors.get(c, "#7f8c8d"), alpha=0.15)
+  ax.set_title(f"{args.target} — {args.horizon}-step forecast")
+  ax.legend(); ax.grid(alpha=0.3); fig.tight_layout()
+  fig.savefig("forecast.png", dpi=140)
+  print("written: forecast.png")

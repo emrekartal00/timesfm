@@ -39,3 +39,5 @@ transfer/
 model.safetensors
 *.safetensors
 *.part-*
+
+sweep_results.csv
