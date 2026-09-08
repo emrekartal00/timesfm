@@ -70,21 +70,25 @@ if isinstance(args.sheet, str) and args.sheet.strip().lstrip("-").isdigit():
 # configuration is refit at every origin, so cost is configs x origins.
 TIMESFM_GRID = {
     "quick": dict(strategy=["auto", "raw"], covariates=[True, False],
-                  znorm=[False], context=[None]),
+                  znorm=[False], context=[None], rescale=[0, 90]),
     # Context values assume daily data. On several years of history the
     # question is not "can the model take it all" -- 15,360 steps is the limit
     # and few sheets reach it -- but whether the oldest years still describe the
     # same behaviour. A card whose limit changed, or a series carried through a
     # period of high inflation, may forecast better on less history.
-    "full": dict(strategy=["auto", "multichannel", "raw", "signed-log"],
-                 covariates=[True, False], znorm=[False, True],
-                 context=[None, 1825, 1095, 730, 365]),
+    "full": dict(strategy=["auto", "multichannel", "raw"],
+                 covariates=[True], znorm=[False],
+                 context=[None, 1825, 1095, 730],
+                 rescale=[0, 90, 180]),
 }
 GBM_GRID = {
-    "quick": dict(num_leaves=[15, 31], learning_rate=[0.05], rounds=[300],
-                  min_data_in_leaf=[20]),
-    "full": dict(num_leaves=[7, 15, 31, 63], learning_rate=[0.03, 0.05, 0.1],
-                 rounds=[200, 300, 600], min_data_in_leaf=[10, 20, 40]),
+    "quick": dict(num_leaves=[15, 31], learning_rate=[0.05], rounds=[600],
+                  min_data_in_leaf=[20], rescale=[0, 90]),
+    # rounds=600 won nearly every pairing on real data, meaning the old grid
+    # stopped before the optimum. Extended upward.
+    "full": dict(num_leaves=[15, 31, 63], learning_rate=[0.05, 0.1],
+                 rounds=[600, 1200, 2000], min_data_in_leaf=[20, 40],
+                 rescale=[0, 90]),
 }
 
 
@@ -96,6 +100,7 @@ def expand(grid):
 
 def label(model, cfg):
   short = {"strategy": "strat", "covariates": "cov", "znorm": "znorm",
+           "rescale": "rescale",
            "context": "ctx", "num_leaves": "leaves", "learning_rate": "lr",
            "rounds": "rounds", "min_data_in_leaf": "minleaf"}
   bits = [f"{short.get(k, k)}={v}" for k, v in cfg.items()]

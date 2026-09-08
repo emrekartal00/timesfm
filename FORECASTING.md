@@ -426,7 +426,38 @@ dropped from the CLI; the implementation is in git history at commit `a04b108`.
 
 ---
 
-## 9. Troubleshooting
+## 9. Improving a poor result
+
+In the order that has actually paid off:
+
+**1. Check calibration is on.** If the gradient-boosted model's coverage is in
+the 40s or 50s, `CALIBRATE_INTERVALS` is not taking effect. This costs nothing
+in point accuracy and is the single largest coverage fix available.
+
+**2. Check the covariates are live.** The loading section must say how many
+holidays it found. If it says NONE, `pip install holidays` — that was worth 42%
+in testing.
+
+**3. Adjust for drift, if a shorter context beat using everything.** That
+pattern means the old data is hurting: a normal day years ago is not a normal
+day now. `RESCALE_WINDOW = 90` divides every day by how big a typical day was at
+that time, forecasts the levelled series, then restores today's scale — no
+inflation figures needed. On a series drifting 8.7x it moved the
+gradient-boosted model from MAE 584M to 552M, pinball 200M to 174M, and coverage
+77% to 89%. It made TimesFM slightly worse, which fits: TimesFM normalises
+internally, while the trees split on absolute values and drift genuinely hurts
+them. Sweep it rather than assuming.
+
+**4. Push the boosting rounds up.** If `rounds=600` wins nearly every pairing,
+the grid stopped before the optimum. The full sweep now goes to 2000.
+
+**5. Consider the target.** `--target purchases` is a cleaner problem than
+`--target growth`: no sign changes and no payment spikes. If you only need the
+spending side, it forecasts considerably better.
+
+---
+
+## 10. Troubleshooting
 
 **`No module named timesfm3`** — you cloned but did not install, or your IDE
 uses a different interpreter. Install from inside the console with

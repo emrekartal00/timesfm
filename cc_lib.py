@@ -348,6 +348,7 @@ class TimesFMParams:
   znorm: bool = S.TIMESFM_ZNORM
   make_positive: bool = False
   batch_size: int = 8
+  rescale: int | None = None      # None = use settings.RESCALE_WINDOW
   device: str | None = S.TIMESFM_DEVICE
   offline: bool = S.TIMESFM_OFFLINE
   # Where the weights come from, in order of precedence: --checkpoint on the
@@ -395,9 +396,14 @@ def timesfm_forecast(data, target, upto, horizon, p: TimesFMParams):
     return point, quant[:, [0, 4, 8]]
 
   if strategy == "signed-log":
+    # expm1 turns a small error in log space into a huge one at the scale a
+    # payment spike lives at: on a series in the billions this produced pinball
+    # losses of 1e25. Clip the exponent to the range actually seen in the
+    # history, so a bad prediction is merely wrong rather than astronomical.
     warped = np.sign(values) * np.log1p(np.abs(values))
     out = call([warped.astype(np.float32)])
-    inv = lambda z: np.sign(z) * np.expm1(np.abs(z))
+    limit = float(np.max(np.abs(warped))) + 1.0 if len(warped) else 20.0
+    inv = lambda z: np.sign(z) * np.expm1(np.clip(np.abs(z), 0.0, limit))
     return inv(out.forecast), inv(out.quantiles)[:, [0, 4, 8]]
 
   out = call([values.astype(np.float32)])
@@ -413,6 +419,7 @@ class GBMParams:
   rounds: int = S.GBM_ROUNDS
   min_data_in_leaf: int = S.GBM_MIN_DATA_IN_LEAF
   feature_fraction: float = S.GBM_FEATURE_FRACTION
+  rescale: int | None = None      # None = use settings.RESCALE_WINDOW
 
 
 def _origin_features(values, t, p: GBMParams):
@@ -495,6 +502,33 @@ def gbm_forecast(data, target, upto, horizon, p: GBMParams):
   return quant[:, 1], quant
 
 
+def trailing_scale(values, window):
+  """The typical size of the series as of each step, using only the past.
+
+  A series carried through high inflation is not one series: a normal day in
+  2019 and a normal day in 2026 are different quantities, and a model trained
+  across both is trying to fit a moving target. Dividing each point by the
+  typical size *at that time* puts every year on the same footing.
+
+  The median is used rather than the mean so payment spikes do not inflate the
+  scale, and it is shifted one step so a value never helps set its own scale.
+  """
+  ser = pd.Series(np.abs(np.asarray(values, dtype=float)))
+  sc = ser.rolling(window, min_periods=max(5, window // 4)).median().shift(1)
+  sc = sc.replace(0.0, np.nan).bfill().ffill()
+  return sc.fillna(1.0).clip(lower=1e-9).to_numpy()
+
+
+def _rescaled(data, scale):
+  """A copy of the data with every series divided by the trailing scale."""
+  idx = data.index
+  s = pd.Series(scale, index=idx)
+  return dataclasses.replace(
+      data,
+      balance=data.balance / s, net_change=data.net_change / s,
+      purchases=data.purchases / s, payments=data.payments / s)
+
+
 def _raw_forecast(model, data, target, upto, horizon, params):
   if model == "timesfm":
     return timesfm_forecast(data, target, upto, horizon, params or TimesFMParams())
@@ -544,7 +578,18 @@ def forecast(model, data, target, upto, horizon, params=None, calibrate=None):
   With calibration on, the p10/p90 bounds are widened by an amount measured on
   held-out data, so the stated 80% interval covers about 80% in practice.
   """
-  point, quant = _raw_forecast(model, data, target, upto, horizon, params)
+  window = getattr(params, "rescale", None)
+  window = S.RESCALE_WINDOW if window is None else window
+  if window:
+    # Forecast the inflation-adjusted series, then put the scale back. The
+    # scale is assumed to hold over the horizon, which is fair for a month.
+    scale = trailing_scale(data.target(target).to_numpy(), window)
+    scaled = _rescaled(data, scale)
+    here = float(scale[upto - 1])
+    point, quant = _raw_forecast(model, scaled, target, upto, horizon, params)
+    point, quant = point * here, quant * here
+  else:
+    point, quant = _raw_forecast(model, data, target, upto, horizon, params)
   if calibrate is None:
     calibrate = S.CALIBRATE_INTERVALS
   if not calibrate:
@@ -552,7 +597,8 @@ def forecast(model, data, target, upto, horizon, params=None, calibrate=None):
 
   # The level is part of the key, so changing TARGET_COVERAGE takes effect
   # instead of reusing padding computed for a different level.
-  key = (model, target, upto, horizon, id(data), repr(params), S.TARGET_COVERAGE)
+  key = (model, target, upto, horizon, id(data), repr(params),
+         S.TARGET_COVERAGE, window)
   if key not in _CONFORMAL_CACHE:
     _CONFORMAL_CACHE[key] = _conformal_width(
         model, data, target, upto, horizon, params, S.CALIBRATION_ORIGINS)

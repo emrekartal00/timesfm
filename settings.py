@@ -185,6 +185,25 @@ GBM_FEATURE_FRACTION = 0.9
 # Sensible range: 0.5 to 1.0.
 
 
+RESCALE_WINDOW = 0
+# Adjust for inflation, or any other drift in the size of the numbers.
+#
+# WHY. A series running from 2019 to today is not really one series. Turkish
+# inflation means a normal day in 2019 and a normal day in 2026 are different
+# quantities, and a model trying to learn from both is chasing a moving target.
+# The tell is in the sweep: if a SHORTER context beats using all your history,
+# the old data is hurting rather than helping, and this is why.
+#
+# WHAT IT DOES. Divides every day by how big a typical day was AT THAT TIME,
+# forecasts the levelled-out series, then puts today's scale back on the answer.
+# It needs no inflation figures -- the drift is measured from your own numbers.
+#
+# HOW TO SET IT. 0 switches it off. Otherwise it is the number of days used to
+# judge "a typical day", so 90 means the last quarter.
+#     RESCALE_WINDOW = 90     a quarter -- a good first try
+#     RESCALE_WINDOW = 180    half a year, steadier, slower to react
+# Measure it rather than assume: run the sweep with it on and off.
+
 CALIBRATE_INTERVALS = True
 # Widen the p10-p90 range so it actually contains about 80% of real values.
 #
