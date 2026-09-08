@@ -233,8 +233,12 @@ TIMESFM_CONTEXT = None
 # How much history to feed TimesFM. None means all of it, and None is written
 # without quotes. Set a number to use only the most recent N steps.
 # Use this if your older data is not comparable any more -- a changed credit
-# limit, a different card, a business that changed shape.
-# Example: TIMESFM_CONTEXT = 365
+# limit, a different card, a business that changed shape, or a stretch of high
+# inflation that makes 2019 amounts mean something different from 2026 amounts.
+# For daily data: 365 is one year, 730 two years, 1825 five years.
+# Example: TIMESFM_CONTEXT = 730
+# Do not guess at this. Find it:
+#     python sweep.py --excel yourfile.xlsx --only timesfm --preset full
 # Command line: --context 365
 
 TIMESFM_ZNORM = False

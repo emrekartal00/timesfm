@@ -63,9 +63,14 @@ args = ap.parse_args()
 TIMESFM_GRID = {
     "quick": dict(strategy=["auto", "raw"], covariates=[True, False],
                   znorm=[False], context=[None]),
+    # Context values assume daily data. On several years of history the
+    # question is not "can the model take it all" -- 15,360 steps is the limit
+    # and few sheets reach it -- but whether the oldest years still describe the
+    # same behaviour. A card whose limit changed, or a series carried through a
+    # period of high inflation, may forecast better on less history.
     "full": dict(strategy=["auto", "multichannel", "raw", "signed-log"],
                  covariates=[True, False], znorm=[False, True],
-                 context=[None, 365, 180]),
+                 context=[None, 1825, 1095, 730, 365]),
 }
 GBM_GRID = {
     "quick": dict(num_leaves=[15, 31], learning_rate=[0.05], rounds=[300],
