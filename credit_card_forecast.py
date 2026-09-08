@@ -80,6 +80,11 @@ ap.add_argument("--grid", default="auto",
 ap.add_argument("--growth-col", default=None,
                 help="use this column as the daily change instead of "
                      "recomputing it from the balance")
+ap.add_argument("--model", default="both", choices=["timesfm", "gbm", "both"],
+                help="timesfm = the foundation model; gbm = gradient-boosted "
+                     "trees on lag and calendar features, the standard strong "
+                     "baseline for daily series; both (default) runs and "
+                     "compares them")
 ap.add_argument("--strategy", default="auto",
                 choices=["auto", "multichannel", "signed-log", "raw"],
                 help="how to model a signed target. auto = multichannel for "
@@ -87,6 +92,10 @@ ap.add_argument("--strategy", default="auto",
 ap.add_argument("--no-covariates", action="store_true",
                 help="skip the calendar covariates")
 ap.add_argument("--no-backtest", action="store_true")
+ap.add_argument("--rolling", type=int, default=0, metavar="N",
+                help="evaluate over N rolling origins instead of one holdout. "
+                     "One holdout is a single sample and rankings flip on it; "
+                     "5-8 gives a conclusion worth acting on")
 ap.add_argument("--plot", action="store_true", help="write forecast.png")
 ap.add_argument("--out", default="forecast.csv")
 args = ap.parse_args()
@@ -445,96 +454,252 @@ def forecast(history_index, history_values, horizon):
   return out.forecast, out.quantiles
 
 
+# ----------------------------------------------------------- gradient boosting --
+# A direct multi-horizon gradient-boosted model. This is the recipe that wins
+# most daily-series forecasting competitions (M5 and friends), so it is the
+# honest thing to measure a foundation model against -- seasonal naive is a
+# floor, not a competitor.
+#
+# Design notes:
+#   * ONE model covering every horizon, with the step h as a feature. Uses far
+#     more training rows than fitting a separate model per step.
+#   * Features split in two. Lags and rolling statistics are computed at the
+#     forecast ORIGIN t, so they never see the future. Calendar features are
+#     computed for the TARGET date t+h, since a date is known in advance --
+#     the same information TimesFM gets through past_future_covariates.
+#   * Quantile objective at 0.1/0.5/0.9 gives a prediction interval that can be
+#     compared with TimesFM's on the same footing.
+
+LAGS = [1, 2, 3, 4, 5, 6, 7, 10, 14, 21, 28, 35]
+WINDOWS = [7, 14, 28]
+
+
+def _origin_features(values, t):
+  """Everything knowable at time t, using no data after t."""
+  past = values[: t + 1]
+  feats = [past[-lag] if len(past) >= lag else np.nan for lag in LAGS]
+  for w in WINDOWS:
+    window = past[-w:] if len(past) >= w else past
+    if len(window) == 0:
+      feats += [np.nan] * 4
+    else:
+      feats += [window.mean(), window.std(), window.min(), window.max()]
+  # How long since the last payment, and how big it was: the balance rebuilds
+  # after a statement, so both matter for what comes next.
+  neg = np.where(past < 0)[0]
+  feats.append(float(t - neg[-1]) if len(neg) else np.nan)
+  feats.append(float(past[neg[-1]]) if len(neg) else np.nan)
+  feats.append(float(past[-28:].sum()) if len(past) >= 28 else float(past.sum()))
+  return feats
+
+
+def _target_calendar(date, h):
+  """Everything knowable about the target date itself."""
+  return [
+      float(h),
+      float(date.dayofweek),
+      float(date.day),
+      float(date.month),
+      float(date.dayofweek >= 5),
+      float(date.is_month_end),
+      float(date.is_month_start),
+      float(date.day in STATEMENT_DAYS) if STATEMENT_DAYS else 0.0,
+  ]
+
+
+def gbm_forecast(index, values, horizon):
+  """Returns (point, quantiles) with quantiles at the 0.1/0.5/0.9 levels."""
+  import lightgbm as lgb
+
+  values = np.asarray(values, dtype=float)
+  n = len(values)
+  start = max(LAGS) + max(WINDOWS)          # need enough history for features
+  if n - start < horizon + 30:
+    raise RuntimeError("not enough history for the gradient-boosted model")
+
+  rows, targets = [], []
+  for t in range(start, n - 1):
+    origin = _origin_features(values, t)
+    for h in range(1, horizon + 1):
+      if t + h >= n:
+        break
+      rows.append(origin + _target_calendar(index[t + h], h))
+      targets.append(values[t + h])
+
+  X = np.asarray(rows, dtype=float)
+  y = np.asarray(targets, dtype=float)
+
+  future = future_index(index[-1], horizon)
+  last = _origin_features(values, n - 1)
+  X_future = np.asarray(
+      [last + _target_calendar(future[h - 1], h) for h in range(1, horizon + 1)],
+      dtype=float)
+
+  params = dict(objective="quantile", verbosity=-1, num_leaves=31,
+                learning_rate=0.05, min_data_in_leaf=20,
+                feature_fraction=0.9, bagging_fraction=0.9, bagging_freq=1)
+  preds = []
+  for alpha in (0.1, 0.5, 0.9):
+    booster = lgb.train({**params, "alpha": alpha},
+                        lgb.Dataset(X, label=y), num_boost_round=300)
+    preds.append(booster.predict(X_future))
+  quant = np.stack(preds, axis=1)
+  quant = np.sort(quant, axis=1)            # keep p10 <= p50 <= p90
+  return quant[:, 1], quant
+
+
 # ------------------------------------------------------------------ backtest --
+MODELS = ["timesfm", "gbm"] if args.model == "both" else [args.model]
+LEVELS3 = np.array([0.1, 0.5, 0.9])
+
+
+def run_model(name, index, values, horizon):
+  """(point, quantiles at 0.1/0.5/0.9) for whichever model was asked for."""
+  if name == "timesfm":
+    point, quant = forecast(index, values, horizon)
+    return point, quant[:, [0, 4, 8]]      # match the GBM's three levels
+  return gbm_forecast(index, values, horizon)
+
+
+def pinball(actual, quant, levels=LEVELS3):
+  err = actual[:, None] - quant
+  return float(np.mean(np.maximum(levels * err, (levels - 1) * err)))
+
+
 if not args.no_backtest and len(series) > args.horizon * 3:
-  rule("5. BACKTEST — HOLDING OUT THE LAST %d DAYS" % args.horizon)
+  rule(f"5. BACKTEST — HOLDING OUT THE LAST {args.horizon} STEPS")
+  if (series.iloc[-args.horizon:] < 0).any():
+    print("note: sMAPE is meaningless on a signed series that crosses zero,")
+    print("      so it is not reported. Judge on MAE and pinball loss.\n")
 
   train = series.iloc[:-args.horizon]
   test = series.iloc[-args.horizon:]
-  pred, _ = forecast(train.index, train.to_numpy(), args.horizon)
-
   actual = test.to_numpy(dtype=float)
-  # Seasonal naive: "next Monday looks like last Monday". The bar any weekly
-  # model has to clear.
-  naive = train.to_numpy(dtype=float)[-7:]
-  naive = np.resize(naive, args.horizon)
+  spike = actual < 0
 
-  def mae(a, b):
-    return float(np.mean(np.abs(a - b)))
+  # Seasonal naive is the floor, not a competitor -- kept only as a sanity line.
+  period = 5 if grid_mode == "business" else 7
+  naive = np.resize(train.to_numpy(dtype=float)[-period:], args.horizon)
 
-  def smape(a, b):
-    denom = (np.abs(a) + np.abs(b)) / 2
-    ok = denom > 0
-    return float(np.mean(np.abs(a[ok] - b[ok]) / denom[ok]) * 100) if ok.any() else float("nan")
+  print(f"{'model':<16}{'MAE':>12}{'pinball':>10}{'80% cov':>9}"
+        f"{'MAE spike':>12}{'MAE other':>12}")
+  print("-" * 71)
 
-  if (actual < 0).any():
-    print("note: sMAPE is unreliable on a signed series that crosses zero.")
-    print("      Judge this one on MAE and pinball loss.\n")
-  print(f"{'model':<18}{'MAE':>14}{'sMAPE':>10}")
-  print(f"{'TimesFM':<18}{mae(actual, pred):>14,.0f}{smape(actual, pred):>9.1f}%")
-  print(f"{'seasonal naive':<18}{mae(actual, naive):>14,.0f}{smape(actual, naive):>9.1f}%")
-  print(f"{'flat mean':<18}{mae(actual, np.full(args.horizon, train.mean())):>14,.0f}"
-        f"{smape(actual, np.full(args.horizon, train.mean())):>9.1f}%")
+  scores = {}
+  for name in MODELS:
+    try:
+      pred, quant = run_model(name, train.index, train.to_numpy(), args.horizon)
+    except Exception as exc:
+      print(f"{name:<16}failed: {type(exc).__name__}: {exc}")
+      continue
+    cov = float(np.mean((actual >= quant[:, 0]) & (actual <= quant[:, 2])))
+    scores[name] = float(np.mean(np.abs(actual - pred)))
+    print(f"{name:<16}{scores[name]:>12,.0f}{pinball(actual, quant):>10,.0f}"
+          f"{cov:>8.0%}"
+          f"{(np.mean(np.abs(actual - pred)[spike]) if spike.any() else float('nan')):>12,.0f}"
+          f"{np.mean(np.abs(actual - pred)[~spike]):>12,.0f}")
 
-  # A signed series lives or dies on the spikes, so score them separately --
-  # an average over all days hides whether payment days were caught at all.
-  if (actual < 0).any():
-    spike = actual < 0
-    print(f"\n  on {spike.sum()} payment day(s):     MAE {mae(actual[spike], pred[spike]):>12,.0f}")
-    print(f"  on {(~spike).sum()} ordinary days:    MAE {mae(actual[~spike], pred[~spike]):>12,.0f}")
+  print(f"{'seasonal naive':<16}{np.mean(np.abs(actual - naive)):>12,.0f}"
+        f"{'-':>10}{'-':>9}"
+        f"{(np.mean(np.abs(actual - naive)[spike]) if spike.any() else float('nan')):>12,.0f}"
+        f"{np.mean(np.abs(actual - naive)[~spike]):>12,.0f}")
 
-  # Pinball loss scores the whole predictive distribution, not just the point.
-  levels = np.array([.1, .2, .3, .4, .5, .6, .7, .8, .9])
-  _, bt_q = forecast(train.index, train.to_numpy(), args.horizon)
-  err = actual[:, None] - bt_q
-  print(f"  pinball loss (all quantiles): {np.mean(np.maximum(levels * err, (levels - 1) * err)):>10,.0f}")
-  inside = np.mean((actual >= bt_q[:, 0]) & (actual <= bt_q[:, 8]))
-  print(f"  80% interval actually covered: {inside:.0%} of days (target 80%)")
-
-  better = mae(actual, pred) < mae(actual, naive)
-  print(f"\nTimesFM beats seasonal naive: {better}")
-  if not better:
-    print("  If it does not beat naive, the extra machinery is not earning its")
-    print("  keep on this series -- check the target choice and the daily grid.")
+  if len(scores) > 1:
+    best = min(scores, key=scores.get)
+    other = [m for m in scores if m != best][0]
+    gap = (scores[other] - scores[best]) / scores[other] * 100
+    print(f"\nbest on this holdout: {best} "
+          f"({gap:.0f}% lower MAE than {other})")
+    print("One holdout is one sample. Rerun with a different --horizon before")
+    print("concluding one model is genuinely better on your data.")
+elif args.rolling and len(series) > args.horizon * (args.rolling + 3):
+  pass   # handled below
 else:
   rule("5. BACKTEST — SKIPPED")
   print("not enough history, or --no-backtest")
 
 
+if args.rolling:
+  rule(f"5b. ROLLING BACKTEST — {args.rolling} ORIGINS")
+  print("Each origin holds out the following {0} steps and refits from scratch.\n"
+        .format(args.horizon))
+  agg = {m: {"mae": [], "pin": [], "cov": []} for m in MODELS}
+  header = f"{'origin':<10}" + "".join(f"{m + ' MAE':>16}" for m in MODELS)
+  print(header)
+  print("-" * len(header))
+  for k in range(args.rolling):
+    cut = len(series) - (k + 1) * args.horizon
+    if cut < args.horizon * 2:
+      break
+    tr, te = series.iloc[:cut], series.iloc[cut:cut + args.horizon]
+    act = te.to_numpy(dtype=float)
+    line = f"{'-' + str((k + 1) * args.horizon) + ' steps':<10}"
+    for m in MODELS:
+      try:
+        pr, qt = run_model(m, tr.index, tr.to_numpy(), args.horizon)
+      except Exception:
+        line += f"{'failed':>16}"
+        continue
+      agg[m]["mae"].append(float(np.mean(np.abs(act - pr))))
+      agg[m]["pin"].append(pinball(act, qt))
+      agg[m]["cov"].append(float(np.mean((act >= qt[:, 0]) & (act <= qt[:, 2]))))
+      line += f"{agg[m]['mae'][-1]:>16,.0f}"
+    print(line)
+
+  print("\n" + f"{'model':<16}{'mean MAE':>12}{'mean pinball':>14}"
+        f"{'mean 80% cov':>14}{'wins':>7}")
+  print("-" * 63)
+  wins = {m: 0 for m in MODELS}
+  n = min(len(agg[m]["mae"]) for m in MODELS) if MODELS else 0
+  for i in range(n):
+    wins[min(MODELS, key=lambda m: agg[m]["mae"][i])] += 1
+  for m in MODELS:
+    if not agg[m]["mae"]:
+      continue
+    print(f"{m:<16}{np.mean(agg[m]['mae']):>12,.0f}"
+          f"{np.mean(agg[m]['pin']):>14,.0f}"
+          f"{np.mean(agg[m]['cov']):>13.0%}{wins[m]:>7}")
+  print("\nCoverage should sit near 80%. A model far below that is overconfident:")
+  print("its interval is too narrow and will under-warn you on a bad month.")
+
+
 # ------------------------------------------------------------------ forecast --
 rule("6. FORECAST")
 
-point, quantiles = forecast(series.index, series.to_numpy(), args.horizon)
 future = future_index(series.index[-1], args.horizon)
+result = pd.DataFrame({"date": future,
+                       "day": [DAYS[d] for d in future.dayofweek]})
 
-result = pd.DataFrame({
-    "date": future,
-    "day": [DAYS[d] for d in future.dayofweek],
-    "forecast": point,
-    "p10": quantiles[:, 0],
-    "p90": quantiles[:, 8],
-})
-print(result.head(14).to_string(index=False,
-                                formatters={"forecast": "{:,.0f}".format,
-                                            "p10": "{:,.0f}".format,
-                                            "p90": "{:,.0f}".format}))
+for name in MODELS:
+  try:
+    point, quant = run_model(name, series.index, series.to_numpy(), args.horizon)
+  except Exception as exc:
+    print(f"{name} failed: {type(exc).__name__}: {exc}")
+    continue
+  suffix = "" if len(MODELS) == 1 else f"_{name}"
+  result[f"forecast{suffix}"] = point
+  result[f"p10{suffix}"] = quant[:, 0]
+  result[f"p90{suffix}"] = quant[:, 2]
+
+fcols = [c for c in result.columns if c.startswith("forecast")]
+fmt = {c: "{:,.0f}".format for c in result.columns if c not in ("date", "day")}
+print(result.head(14).to_string(index=False, formatters=fmt))
 if len(result) > 14:
   print(f"... {len(result) - 14} more rows")
 
 unit = "business days" if grid_mode == "business" else "days"
 print(f"\nTotal over {args.horizon} {unit} "
-      f"({future[0]:%Y-%m-%d} to {future[-1]:%Y-%m-%d}): {point.sum():,.0f}")
-print(f"  80% interval: {quantiles[:, 0].sum():,.0f} to {quantiles[:, 8].sum():,.0f}")
+      f"({future[0]:%Y-%m-%d} to {future[-1]:%Y-%m-%d}):")
+for c in fcols:
+  print(f"  {c:<20}{result[c].sum():>16,.0f}")
 
 print("\nBy week:")
-weekly = result.set_index("date")["forecast"].resample("W").sum()
-for week, total in weekly.items():
-  print(f"  week ending {week:%Y-%m-%d}  {total:>14,.0f}")
+weekly = result.set_index("date")[fcols].resample("W").sum()
+print(weekly.to_string(formatters={c: "{:,.0f}".format for c in fcols}))
 
 print("\nBy month:")
-monthly = result.set_index("date")["forecast"].resample("MS").sum()
-for month, total in monthly.items():
-  print(f"  {month:%Y-%m}  {total:>14,.0f}")
+monthly = result.set_index("date")[fcols].resample("MS").sum()
+print(monthly.to_string(formatters={c: "{:,.0f}".format for c in fcols}))
 
 result.to_csv(args.out, index=False)
 print(f"\nwritten: {args.out}")
@@ -548,9 +713,13 @@ if args.plot:
     fig, ax = plt.subplots(figsize=(13, 5))
     recent = series.iloc[-min(len(series), args.horizon * 4):]
     ax.plot(recent.index, recent.to_numpy(), label="history", color="#3b6ea5", lw=1.2)
-    ax.plot(future, point, label="forecast", color="#c0392b", lw=1.6)
-    ax.fill_between(future, quantiles[:, 0], quantiles[:, 8],
-                    color="#c0392b", alpha=0.18, label="80% interval")
+    colors = {"forecast": "#c0392b", "forecast_timesfm": "#c0392b",
+              "forecast_gbm": "#2d8659"}
+    for c in fcols:
+      sfx = c.replace("forecast", "")
+      ax.plot(future, result[c], label=c, color=colors.get(c, "#7f8c8d"), lw=1.6)
+      ax.fill_between(future, result[f"p10{sfx}"], result[f"p90{sfx}"],
+                      color=colors.get(c, "#7f8c8d"), alpha=0.15)
     ax.set_title(f"{args.target} — TimesFM 3.0, {args.horizon}-day forecast")
     ax.legend()
     ax.grid(alpha=0.3)
