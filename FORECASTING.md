@@ -139,18 +139,25 @@ knowable in advance.
 | argument | default | meaning |
 |---|---|---|
 | `--excel PATH` | *required* | the .xlsx file |
-| `--sheet NAME` | first sheet | sheet name or index |
-| `--date-col NAME` | auto | override date column detection |
-| `--balance-col NAME` | auto | override balance column detection |
-| `--currency-col NAME` | auto | override currency column detection |
+| `--sheet N` | `settings.SHEET` | sheet name, or index from 0. The second sheet is `1` |
+| `--date-col NAME` | `settings.COLUMN_DATE` | override date column detection |
+| `--balance-col NAME` | `settings.COLUMN_BALANCE` | override balance column detection |
+| `--currency-col NAME` | `settings.COLUMN_CURRENCY` | override currency column detection |
 | `--currency TRY` | most rows | which currency to model |
-| `--growth-col NAME` | auto | name of your growth column |
+| `--growth-col NAME` | `settings.COLUMN_GROWTH` | name of your growth column |
 | `--use-growth` | off | read the daily change from your sheet's column instead of recomputing it. **You probably do not need this** — see below |
 | `--grid MODE` | `auto` | `auto`, `business`, `calendar` |
 
-Column detection matches English and Turkish names (`date`/`tarih`,
-`balance`/`bakiye`, `currency`/`döviz`, `growth`/`artış`). If it guesses wrong
-the first section prints what it picked — check that line first.
+Column names are set in `settings.py` PART 0, so normally you pass none of
+these. If a name is left blank there, detection falls back to matching English
+and Turkish words (`date`/`tarih`, `balance`/`bakiye`, `currency`/`döviz`,
+`growth`/`artış`) — but that only works when the name contains the whole word,
+so a column called `DAT` has to be named explicitly. Either way the first
+printed line shows what was used:
+
+```
+date='DAT' balance='BALANCE' currency='CUR'
+```
 
 **Currencies are never mixed.** Mixing them would just fit an exchange rate. If
 your sheet has several, one is chosen and reported; use `--currency` to pick.
@@ -207,6 +214,13 @@ Two rules: `True` and `False` are capitalised exactly like that, and words need
 quotes (`"business"`) while numbers do not (`31`).
 
 It has five parts.
+
+**Part 0 — your spreadsheet.** Which sheet to read and the four column names,
+set once so you never type them. Everything else in the sheet is ignored
+deliberately: `day`, `year`, `yearmonth` and `dayweek` are all derived from the
+date and are recomputed rather than trusted, and `diff` is ignored because it is
+growth with weekends forced to zero — and those forced zeros are exactly what
+hurts the forecast.
 
 **Part 1 — which calendar facts the models get.** Nineteen covariates behind
 nine on/off switches, including public holidays and your scheduled payment

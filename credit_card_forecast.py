@@ -26,12 +26,13 @@ ap = argparse.ArgumentParser(description=__doc__,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
 src = ap.add_argument_group("input")
 src.add_argument("--excel", required=True, help="path to the .xlsx file")
-src.add_argument("--sheet", default=0, help="sheet name or index (default: first)")
-src.add_argument("--date-col", default=None, help="override the date column")
-src.add_argument("--balance-col", default=None, help="override the balance column")
-src.add_argument("--currency-col", default=None, help="override the currency column")
+src.add_argument("--sheet", default=S.SHEET,
+                 help="sheet name, or index counting from 0 (default: from settings.py)")
+src.add_argument("--date-col", default=S.COLUMN_DATE, help="override the date column")
+src.add_argument("--balance-col", default=S.COLUMN_BALANCE, help="override the balance column")
+src.add_argument("--currency-col", default=S.COLUMN_CURRENCY, help="override the currency column")
 src.add_argument("--currency", default=None, help="which currency to model")
-src.add_argument("--growth-col", default=None, help="name of the growth column")
+src.add_argument("--growth-col", default=S.COLUMN_GROWTH, help="name of the growth column")
 src.add_argument("--use-growth", action="store_true",
                  help="READ the daily change from the sheet's growth column "
                       "instead of recomputing it from the balance. This is NOT "
@@ -68,6 +69,11 @@ out.add_argument("--no-backtest", action="store_true")
 out.add_argument("--plot", action="store_true", help="write forecast.png")
 out.add_argument("--out", default="forecast.csv")
 args = ap.parse_args()
+
+# argparse hands back a string, and pandas treats a string as a sheet NAME.
+# "--sheet 1" must mean the second sheet, not a sheet called "1".
+if isinstance(args.sheet, str) and args.sheet.strip().lstrip("-").isdigit():
+  args.sheet = int(args.sheet)
 
 MODELS = ["timesfm", "gbm"] if args.model == "both" else [args.model]
 tf_params = L.TimesFMParams(

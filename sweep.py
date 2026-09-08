@@ -31,15 +31,16 @@ import numpy as np
 import pandas as pd
 
 import cc_lib as L
+import settings as S
 
 ap = argparse.ArgumentParser(description=__doc__,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument("--excel", required=True)
-ap.add_argument("--sheet", default=0)
-ap.add_argument("--date-col", default=None)
-ap.add_argument("--balance-col", default=None)
+ap.add_argument("--sheet", default=S.SHEET)
+ap.add_argument("--date-col", default=S.COLUMN_DATE)
+ap.add_argument("--balance-col", default=S.COLUMN_BALANCE)
 ap.add_argument("--currency", default=None)
-ap.add_argument("--growth-col", default=None)
+ap.add_argument("--growth-col", default=S.COLUMN_GROWTH)
 ap.add_argument("--use-growth", action="store_true",
                 help="read the daily change from the sheet's column rather "
                      "than recomputing it. Not the same as --target growth")
@@ -57,6 +58,11 @@ ap.add_argument("--out", default="sweep_results.csv")
 ap.add_argument("--checkpoint", default=None)
 ap.add_argument("--device", default=None)
 args = ap.parse_args()
+
+# argparse hands back a string, and pandas treats a string as a sheet NAME.
+# "--sheet 1" must mean the second sheet, not a sheet called "1".
+if isinstance(args.sheet, str) and args.sheet.strip().lstrip("-").isdigit():
+  args.sheet = int(args.sheet)
 
 
 # ------------------------------------------------------------------- grids ---

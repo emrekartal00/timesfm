@@ -24,6 +24,35 @@ without editing anything. The command-line flag is named in each comment.
 """
 
 # =============================================================================
+# PART 0. YOUR SPREADSHEET
+# =============================================================================
+# The names of the columns in your file, so you never have to type them. Set
+# once here and both credit_card_forecast.py and sweep.py use them.
+# Any of these can still be overridden for a single run: --sheet, --date-col,
+# --balance-col, --currency-col, --growth-col.
+
+SHEET = 1
+# Which sheet to read, counting from 0. The first sheet is 0, the second is 1.
+# You can also give a name instead, in quotes: SHEET = "Sayfa2"
+
+COLUMN_DATE = "DAT"
+COLUMN_BALANCE = "BALANCE"
+COLUMN_CURRENCY = "CUR"
+COLUMN_GROWTH = "growth"
+# The four columns that are actually read. Quotes required, and the spelling
+# must match the sheet exactly, capitals included.
+#
+# Everything else in the sheet is ignored on purpose. day, year, yearmonth and
+# dayweek are all derived from the date, so they are recomputed rather than
+# trusted -- a fill-down that stopped short, or a row someone inserted, would
+# otherwise be silently wrong. The "diff" column is ignored too: it is growth
+# with weekends forced to zero, and those forced zeros are exactly what hurts
+# the forecast. Plain "growth" is the one to use.
+#
+# Set COLUMN_CURRENCY = None (no quotes) if your sheet has no currency column.
+
+
+# =============================================================================
 # PART 1. WHICH CALENDAR FACTS THE MODELS GET
 # =============================================================================
 # Neither model knows what a date is. It sees a list of numbers. These settings
