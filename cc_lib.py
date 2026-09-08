@@ -185,17 +185,21 @@ def score(actual, point, quant):
 _TIMESFM_CACHE = {}
 
 
-def _timesfm_model(checkpoint, device, batch_size):
+def _timesfm_model(checkpoint, device, batch_size, offline=False):
   """Loaded once per process -- the checkpoint is 1.3 GB."""
   import torch
   from timesfm3 import ModelConfig, TimesFM3Forecaster
   if device is None:
     device = ("cuda" if torch.cuda.is_available()
               else "mps" if torch.backends.mps.is_available() else "cpu")
-  key = (checkpoint, device, batch_size)
+  key = (checkpoint, device, batch_size, offline)
   if key not in _TIMESFM_CACHE:
+    # local_files_only stops the Hub revision check that otherwise runs even
+    # when the weights are already cached. Harmless with internet, and the
+    # difference between working and hanging without it.
     _TIMESFM_CACHE[key] = TimesFM3Forecaster(ModelConfig(
-        checkpoint_path=checkpoint, device=device, per_core_batch_size=batch_size))
+        checkpoint_path=checkpoint, device=device,
+        per_core_batch_size=batch_size, local_files_only=offline))
   return _TIMESFM_CACHE[key], device
 
 
@@ -321,6 +325,7 @@ class TimesFMParams:
   make_positive: bool = False
   batch_size: int = 8
   device: str | None = S.TIMESFM_DEVICE
+  offline: bool = S.TIMESFM_OFFLINE
   # Where the weights come from, in order of precedence: --checkpoint on the
   # command line, then TIMESFM_WEIGHTS in settings.py, then the TIMESFM_CHECKPOINT
   # environment variable, then the public HuggingFace repo.
@@ -332,7 +337,7 @@ class TimesFMParams:
 
 def timesfm_forecast(data, target, upto, horizon, p: TimesFMParams):
   """Forecast data.target(target)[:upto] forward `horizon` steps."""
-  model, _ = _timesfm_model(p.checkpoint, p.device, p.batch_size)
+  model, _ = _timesfm_model(p.checkpoint, p.device, p.batch_size, p.offline)
   index = data.index[:upto]
   values = data.target(target).to_numpy()[:upto]
 

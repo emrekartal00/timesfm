@@ -60,6 +60,9 @@ mdl.add_argument("--checkpoint", default=None,
                  help="folder holding the TimesFM weights, or a HuggingFace "
                       "repo id. Default comes from TIMESFM_WEIGHTS in settings.py")
 mdl.add_argument("--device", default=S.TIMESFM_DEVICE, help="cuda / mps / cpu")
+mdl.add_argument("--offline", action="store_true", default=S.TIMESFM_OFFLINE,
+                 help="never contact HuggingFace. Only needed when the weights "
+                      "come from the cache rather than a local folder")
 mdl.add_argument("--num-leaves", type=int, default=S.GBM_NUM_LEAVES, help="GBM only")
 mdl.add_argument("--learning-rate", type=float, default=S.GBM_LEARNING_RATE, help="GBM only")
 mdl.add_argument("--rounds", type=int, default=S.GBM_ROUNDS, help="GBM only")
@@ -80,7 +83,7 @@ if isinstance(args.sheet, str) and args.sheet.strip().lstrip("-").isdigit():
 MODELS = ["timesfm", "gbm"] if args.model == "both" else [args.model]
 tf_params = L.TimesFMParams(
     strategy=args.strategy, covariates=not args.no_covariates, znorm=args.znorm,
-    context=args.context, device=args.device,
+    context=args.context, device=args.device, offline=args.offline,
     **({"checkpoint": args.checkpoint} if args.checkpoint else {}))
 gbm_params = L.GBMParams(num_leaves=args.num_leaves,
                          learning_rate=args.learning_rate, rounds=args.rounds)

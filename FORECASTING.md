@@ -182,7 +182,8 @@ your sheet has several, one is chosen and reported; use `--currency` to pick.
 | `--znorm` | off | TimesFM | z-normalise before the model, undo after |
 | `--context N` | all | TimesFM | cap how much history is fed |
 | `--checkpoint PATH` | `settings.TIMESFM_WEIGHTS` | TimesFM | folder holding the weights, for an offline machine |
-| `--device` | auto | TimesFM | `cuda`, `mps`, `cpu` |
+| `--device` | `settings.TIMESFM_DEVICE` | TimesFM | `cuda`, `mps`, `cpu` |
+| `--offline` | `settings.TIMESFM_OFFLINE` | TimesFM | never contact HuggingFace |
 | `--num-leaves N` | `31` | GBM | tree size. Lower = smoother |
 | `--learning-rate F` | `0.05` | GBM | lower needs more rounds |
 | `--rounds N` | `300` | GBM | boosting iterations |
@@ -280,6 +281,17 @@ TIMESFM_WEIGHTS = r"C:\Users\you\Desktop\transfer"
 
 Keep the `r` before the quote on Windows. See `OFFLINE-WEIGHTS.md` for getting
 the weights onto that machine in the first place.
+
+**A folder path is already offline.** It is read straight off the disk and never
+touches the network — verified by blocking the socket layer and loading anyway.
+`TIMESFM_OFFLINE = True` is for the other case: when `TIMESFM_WEIGHTS` is `None`
+so the weights come from the HuggingFace cache. Loading them then pings
+huggingface.co to ask whether a newer copy exists, even though they are already
+downloaded, and on a machine where that site is blocked the request hangs rather
+than failing fast. Setting it skips the check.
+
+Either way your data goes nowhere: that check runs before the spreadsheet is
+read and carries only the model name.
 
 Anything you set here can still be overridden for one run from the command
 line, and each comment names the flag that does it.

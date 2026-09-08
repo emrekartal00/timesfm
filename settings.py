@@ -307,6 +307,22 @@ TIMESFM_WEIGHTS = None
 # See OFFLINE-WEIGHTS.md for getting the weights onto that machine.
 # Command line: --checkpoint C:\path\to\transfer
 
+TIMESFM_OFFLINE = False
+# Forbid any contact with the internet when loading the model.
+#
+# You do NOT need this if TIMESFM_WEIGHTS above points at a folder on your disk.
+# A folder path is read straight off the disk and never touches the network.
+#
+# It matters in one case: TIMESFM_WEIGHTS is None, so the weights come from the
+# HuggingFace cache. Even when they are already downloaded, loading them pings
+# huggingface.co to ask whether a newer copy exists. On a machine where that
+# site is blocked, the request hangs or errors instead of failing fast. Setting
+# this to True skips the check and uses the cached copy.
+#
+# Your data is never sent anywhere either way. That check happens before your
+# spreadsheet is read, and carries only the model name.
+# Command line: --offline
+
 TIMESFM_DEVICE = None
 # Which processor to use. None means pick the best available automatically,
 # which is right almost always. Override with "cuda" for an NVIDIA GPU, "mps"
