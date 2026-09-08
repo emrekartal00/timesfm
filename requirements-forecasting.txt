@@ -1,0 +1,54 @@
+# =============================================================================
+# Everything the forecasting scripts need.
+#
+# Install with:
+#     python -m pip install -r requirements-forecasting.txt
+#
+# Use "python -m pip", not plain "pip". That guarantees the packages land in the
+# same Python you actually run the scripts with, which is the usual reason an
+# install appears to work and the script still says "No module named ...".
+#
+# These are exact versions, all verified working together on 2026-09-08. If you
+# prefer newer ones, change == to >= and read the numpy warning below first.
+# =============================================================================
+
+# --- The model itself --------------------------------------------------------
+# torch runs TimesFM. The CPU build is fine; it is slower but correct.
+# On an NVIDIA machine install the CUDA build from https://pytorch.org instead,
+# then this file's other lines still apply.
+torch==2.10.0
+
+# Downloading and reading the TimesFM checkpoint. Not needed if you are loading
+# weights from a local folder, but harmless to have.
+huggingface_hub==1.7.2
+safetensors==0.8.0
+
+# --- Reading your spreadsheet ------------------------------------------------
+pandas==2.3.3
+openpyxl==3.1.5          # this is what lets pandas open .xlsx files
+
+# --- IMPORTANT: numpy must stay below version 2 ------------------------------
+# numpy 2.x is not compatible with the compiled parts of scikit-learn,
+# matplotlib, statsmodels and lightgbm as pinned here. Installing numpy 2 breaks
+# all four at once, with errors like "numpy.dtype size changed". Leave this line
+# alone unless you are upgrading everything below it at the same time.
+numpy==1.26.4
+
+# --- The comparison model ----------------------------------------------------
+lightgbm==4.6.0          # the gradient-boosted model, --model gbm
+scikit-learn==1.7.2      # lightgbm imports this even when unused
+scipy==1.17.1
+
+# --- Seasonality report and plots --------------------------------------------
+# Both optional. Without statsmodels you lose the autocorrelation and seasonal
+# strength lines; without matplotlib you lose --plot. Everything else still runs.
+statsmodels==0.15.0
+matplotlib==3.11.1
+
+# --- Public holidays ---------------------------------------------------------
+# Supplies the holiday covariates, including Turkey's religious holidays, which
+# move about eleven days earlier each year and so cannot be hard-coded.
+# Without this package the holiday features switch themselves off silently
+# rather than crashing -- and switching them off cost 42% accuracy in testing,
+# so do install it.
+holidays==0.104

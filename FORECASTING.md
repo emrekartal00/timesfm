@@ -16,7 +16,22 @@ of the data preparation, their numbers would quietly stop being comparable.
 
 ---
 
-## 1. Quick start
+## 1. Install
+
+```bash
+python -m pip install -e ".[torch]"                      # TimesFM itself
+python -m pip install -r requirements-forecasting.txt    # everything else
+```
+
+Use `python -m pip`, not plain `pip`: it guarantees the packages land in the
+same Python you run the scripts with, which is the usual reason an install looks
+fine and the script still says `No module named ...`.
+
+The versions in that file are pinned and verified together. The one to leave
+alone is **`numpy==1.26.4`** — numpy 2 breaks the compiled parts of
+scikit-learn, matplotlib, statsmodels and lightgbm all at once.
+
+## 2. Quick start
 
 ```bash
 python credit_card_forecast.py --excel yourfile.xlsx
@@ -40,7 +55,7 @@ and rerun `credit_card_forecast.py` with whatever won.
 
 ---
 
-## 2. What the script does to your data
+## 3. What the script does to your data
 
 **It only ever reads the date and balance columns.** Day of month, year,
 yearmonth, day of week and growth are all derived from those, so they are
@@ -71,7 +86,7 @@ knowable in advance.
 
 ---
 
-## 3. `credit_card_forecast.py` arguments
+## 4. `credit_card_forecast.py` arguments
 
 ### Input
 
@@ -134,7 +149,7 @@ on what has accumulated, which is what lets the model anticipate the spike.
 
 ---
 
-## 4. Changing things without touching code — `settings.py`
+## 5. Changing things without touching code — `settings.py`
 
 `settings.py` is a plain list of named values, each with a sentence explaining
 what it does and an example. Edit a value, save, rerun. Nothing else needs
@@ -213,7 +228,7 @@ which is the usual answer.
 
 ---
 
-## 5. `sweep.py` arguments
+## 6. `sweep.py` arguments
 
 Everything in the Input section above works here too, plus:
 
@@ -235,7 +250,7 @@ To change what is swept, edit `TIMESFM_GRID` and `GBM_GRID` at the top of
 
 ---
 
-## 6. Reading the numbers
+## 7. Reading the numbers
 
 | metric | meaning |
 |---|---|
@@ -254,7 +269,7 @@ crosses zero; it rated the *worst* model best in testing.
 
 ---
 
-## 7. What the measurements showed
+## 8. What the measurements showed
 
 On synthetic data shaped like a card statement, over rolling origins:
 
@@ -283,7 +298,7 @@ dropped from the CLI; the implementation is in git history at commit `a04b108`.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 **`No module named timesfm3`** — you cloned but did not install, or your IDE
 uses a different interpreter. See `SETUP-LOCAL.md`.
