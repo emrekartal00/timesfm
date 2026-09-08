@@ -64,6 +64,43 @@ USE_STATEMENT_DAYS = True
 #     payments recur on days of month [14, 15, 16]
 # This is the most valuable covariate for a signed forecast. Keep it on.
 
+USE_HOLIDAYS = True
+# Tells the models which days are public holidays, plus the day before one, the
+# day after one, and "bridge" days (a lone working day trapped between a holiday
+# and a weekend, which people often take off).
+# Holiday eves are frequently the busiest spending days of the year, and the
+# holidays themselves among the quietest, so this is worth having.
+# Set to False to switch all four holiday facts off.
+
+HOLIDAY_COUNTRY = "TR"
+# Which country's public holidays to use. Quotes required. "TR" is Turkey.
+# This handles the religious holidays correctly, which matters: Ramazan and
+# Kurban Bayramı move about eleven days earlier every year, so a hard-coded
+# list would quietly go wrong after one year.
+# Other examples: "DE" Germany, "GB" United Kingdom, "US" United States.
+# Set to None (no quotes) to switch holidays off entirely.
+
+USE_SCHEDULED_PAYMENT_DAYS = True
+# Tells the models about your regular payment dates, described just below.
+# This is separate from USE_STATEMENT_DAYS: that one is guessed from your
+# history, this one is the schedule you already know. Having both is fine and
+# usually better, because each catches what the other misses.
+
+PAYMENT_DAYS_OF_MONTH = (4, 14, 24)
+# The days of the month your commercial card payments are due. Keep the commas
+# and brackets exactly as they are.
+# You do NOT need to list the shifted dates. A payment due on the 14th that
+# lands on a Sunday or a public holiday moves to a working day, which is why you
+# see the 13th or the 15th, and the script works those out for you -- for every
+# due date it also marks the nearest working day before and the nearest working
+# day after, so the model can learn which way your bank moves them. It also
+# measures how far each day is from the nearest due date, so it can see a
+# payment coming rather than only recognising the day it lands.
+# If your card is personal rather than commercial, or the dates differ:
+#     PAYMENT_DAYS_OF_MONTH = (15,)          one date a month, note the comma
+#     PAYMENT_DAYS_OF_MONTH = (1, 15)        two dates a month
+# Set to () to switch this off.
+
 
 # =============================================================================
 # PART 2. CALIBRATING THE GRADIENT-BOOSTED MODEL (GBM)

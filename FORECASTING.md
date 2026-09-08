@@ -146,14 +146,41 @@ quotes (`"business"`) while numbers do not (`31`).
 
 It has five parts.
 
-**Part 1 — which calendar facts the models get.** Ten covariates behind six
-on/off switches. This is the biggest lever in the pipeline. Switching off just
+**Part 1 — which calendar facts the models get.** Nineteen covariates behind
+nine on/off switches, including public holidays and your scheduled payment
+dates. This is the biggest lever in the pipeline. Switching off just
 two of them made TimesFM 84% worse in testing:
 
 | | error | payment-day error |
 |---|---|---|
 | all covariates on | **1,180** | **3,603** |
 | day-of-month and statement-day off | 2,175 | 12,849 |
+
+Holidays and scheduled payment dates were added later and are worth as much
+again. On a sheet with Turkish holidays and payments due on the 4th, 14th and
+24th:
+
+| | TimesFM | payment-day | GBM | payment-day |
+|---|---|---|---|---|
+| holidays + payment dates on | **844** | **1,204** | **858** | **1,269** |
+| both off | 1,452 | 4,609 | 1,080 | 3,180 |
+
+That is 42% off TimesFM's error and 74% off its payment-day error.
+
+**Public holidays** need the `holidays` package (`pip install holidays`) and are
+set with `HOLIDAY_COUNTRY = "TR"`. Turkey's religious holidays move about eleven
+days earlier each year, so they are computed rather than listed — a hard-coded
+list would go quietly wrong after one year. Four facts are supplied: the holiday
+itself, its eve, the day after, and "bridge" days.
+
+**Scheduled payment dates** are set with `PAYMENT_DAYS_OF_MONTH = (4, 14, 24)`.
+You do not list the shifted dates. A payment due on the 14th that lands on a
+Sunday or a holiday moves to a working day, and the script marks the nearest
+working day both before and after each due date, so the model learns which way
+your bank moves them. It also measures the distance to the nearest due date, so
+a payment can be seen approaching rather than only recognised on arrival.
+Verified: the 14th on a Saturday yields the 13th or the 16th; the 24th on a
+Sunday yields the 22nd or the 25th.
 
 **Part 2 — calibrating GBM.** The four settings that matter, each with a
 sensible range and which direction to move it. The section explains overfitting

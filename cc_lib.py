@@ -192,6 +192,67 @@ def _timesfm_model(checkpoint, device, batch_size):
   return _TIMESFM_CACHE[key], device
 
 
+
+# ------------------------------------------------- holidays and payment dates --
+_HOLIDAY_CACHE = {}
+
+
+def holiday_dates(index):
+  """Public holidays covering the index and a year beyond it, for the horizon.
+
+  Uses the `holidays` package, so Turkey's moving religious holidays (Eid al-Fitr
+  and Eid al-Adha shift about eleven days earlier each year) are handled -- a
+  hard-coded list would silently go wrong after one year.
+  """
+  if not S.USE_HOLIDAYS or not S.HOLIDAY_COUNTRY:
+    return set()
+  years = tuple(range(index[0].year, index[-1].year + 2))
+  key = (S.HOLIDAY_COUNTRY, years)
+  if key not in _HOLIDAY_CACHE:
+    try:
+      import holidays as _h
+      _HOLIDAY_CACHE[key] = set(
+          _h.country_holidays(S.HOLIDAY_COUNTRY, years=list(years)).keys())
+    except Exception:
+      _HOLIDAY_CACHE[key] = set()      # package missing or country unsupported
+  return _HOLIDAY_CACHE[key]
+
+
+def _shift(day, holis, direction):
+  """Walk off weekends and holidays in `direction` until a working day."""
+  for _ in range(10):
+    if day.weekday() < 5 and day.date() not in holis:
+      return day
+    day = day + pd.Timedelta(days=direction)
+  return day
+
+
+def scheduled_payment_dates(index, holis):
+  """The nominal payment days, and where they land once weekends and holidays
+  push them.
+
+  Commercial card payments fall on fixed days of the month -- the 4th, 14th and
+  24th by default -- but a date landing on a Sunday or a public holiday moves to
+  a working day, which is why the 14th shows up as the 13th or the 15th. Both
+  directions are returned because the convention differs by bank, and giving the
+  model both lets it work out which one your data follows.
+  """
+  nominal, earlier, later = set(), set(), set()
+  if not S.USE_SCHEDULED_PAYMENT_DAYS or not S.PAYMENT_DAYS_OF_MONTH:
+    return nominal, earlier, later
+  months = pd.period_range(index[0], index[-1] + pd.Timedelta(days=400), freq="M")
+  for month in months:
+    for dom in S.PAYMENT_DAYS_OF_MONTH:
+      try:
+        day = pd.Timestamp(year=month.year, month=month.month, day=int(dom))
+      except ValueError:
+        continue                        # e.g. the 31st of a 30-day month
+      nominal.add(day.date())
+      earlier.add(_shift(day, holis, -1).date())
+      later.add(_shift(day, holis, +1).date())
+  return nominal, earlier, later
+
+
 def calendar_covariates(index, statement_days):
   """Features knowable arbitrarily far ahead, so they may span the horizon.
 
@@ -213,6 +274,31 @@ def calendar_covariates(index, statement_days):
   if S.USE_STATEMENT_DAYS:
     feats.append(np.isin(dom, list(statement_days)).astype(float)
                  if statement_days else np.zeros(len(index)))
+
+  holis = holiday_dates(index)
+  as_dates = np.array([d.date() for d in index])
+  if S.USE_HOLIDAYS and holis:
+    is_hol = np.array([d in holis for d in as_dates], dtype=float)
+    # The eve of a holiday is often the busiest day of all, and the working day
+    # stranded between a holiday and a weekend is often the quietest.
+    prev_day = np.array([(d - pd.Timedelta(days=1)).date() for d in index])
+    next_day = np.array([(d + pd.Timedelta(days=1)).date() for d in index])
+    is_eve = np.array([d in holis for d in next_day], dtype=float)
+    after = np.array([d in holis for d in prev_day], dtype=float)
+    bridge = ((is_hol == 0) & (index.dayofweek < 5) &
+              ((is_eve == 1) | (after == 1))).astype(float)
+    feats += [is_hol, is_eve, after, bridge]
+
+  if S.USE_SCHEDULED_PAYMENT_DAYS and S.PAYMENT_DAYS_OF_MONTH:
+    nominal, earlier, later = scheduled_payment_dates(index, holis)
+    feats.append(np.array([d in nominal for d in as_dates], dtype=float))
+    feats.append(np.array([d in earlier for d in as_dates], dtype=float))
+    feats.append(np.array([d in later for d in as_dates], dtype=float))
+    # Signed distance to the closest scheduled day, so the model can see a
+    # payment approaching rather than only recognising the day itself.
+    targets = np.array(sorted(S.PAYMENT_DAYS_OF_MONTH), dtype=float)
+    dist = np.min(np.abs(dom[:, None] - targets[None, :]), axis=1)
+    feats.append(np.clip(dist, 0, 15) / 15.0)
   if not feats:
     # Every switch in settings.py PART 1 is off. Hand back a single flat row so
     # the model still runs; it simply learns nothing from the calendar.
@@ -303,11 +389,22 @@ def _origin_features(values, t, p: GBMParams):
   return feats
 
 
-def _target_calendar(date, h, statement_days):
+def _target_calendar(date, h, statement_days, holis=frozenset(),
+                     sched=(frozenset(), frozenset(), frozenset())):
+  """The same facts the TimesFM covariates carry. Both models must get the same
+  information or the comparison between them means nothing."""
+  nominal, earlier, later = sched
+  d = date.date()
   return [float(h), float(date.dayofweek), float(date.day), float(date.month),
           float(date.dayofweek >= 5), float(date.is_month_end),
           float(date.is_month_start),
-          float(date.day in statement_days) if statement_days else 0.0]
+          float(date.day in statement_days) if statement_days else 0.0,
+          float(d in holis),
+          float((date + pd.Timedelta(days=1)).date() in holis),
+          float((date - pd.Timedelta(days=1)).date() in holis),
+          float(d in nominal), float(d in earlier), float(d in later),
+          min(abs(date.day - np.array(sorted(S.PAYMENT_DAYS_OF_MONTH), dtype=float)).min()
+              if S.PAYMENT_DAYS_OF_MONTH else 15.0, 15.0) / 15.0]
 
 
 def gbm_forecast(data, target, upto, horizon, p: GBMParams):
@@ -326,20 +423,25 @@ def gbm_forecast(data, target, upto, horizon, p: GBMParams):
   if n - start < horizon + 30:
     raise RuntimeError(f"need more history: have {n}, want >{start + horizon + 30}")
 
+  holis = holiday_dates(index)
+  sched = scheduled_payment_dates(index, holis)
+
   rows, targets = [], []
   for t in range(start, n - 1):
     origin = _origin_features(values, t, p)
     for h in range(1, horizon + 1):
       if t + h >= n:
         break
-      rows.append(origin + _target_calendar(index[t + h], h, data.statement_days))
+      rows.append(origin + _target_calendar(index[t + h], h, data.statement_days,
+                                            holis, sched))
       targets.append(values[t + h])
   X = np.asarray(rows, dtype=float)
   y = np.asarray(targets, dtype=float)
 
   future = future_index(index[-1], horizon, data.grid_mode)
   last = _origin_features(values, n - 1, p)
-  Xf = np.asarray([last + _target_calendar(future[h - 1], h, data.statement_days)
+  Xf = np.asarray([last + _target_calendar(future[h - 1], h, data.statement_days,
+                                           holis, sched)
                    for h in range(1, horizon + 1)], dtype=float)
 
   base = dict(objective="quantile", verbosity=-1, num_leaves=p.num_leaves,

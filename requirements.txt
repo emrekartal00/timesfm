@@ -47,3 +47,6 @@ typing-extensions==4.15.0
     #   anyio
     #   huggingface-hub
     #   typer-slim
+
+# Public-holiday calendars, used as a forecasting covariate.
+holidays>=0.60
