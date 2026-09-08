@@ -9,6 +9,7 @@ on real runs, not assumed.
 | `sweep.py` | Runs many configurations of both models over the same backtest and ranks them. |
 | `settings.py` | **Every knob, in plain English with examples.** Edit this, not the code. |
 | `cc_lib.py` | The shared library both scripts import. Only edit for new behaviour. |
+| `console.py` | **If you only have an IPython console and no terminal, start here.** |
 | `timesfm_guide.py` | Unrelated to card data: an annotated tour of the raw TimesFM API. |
 
 The two scripts share `cc_lib.py` deliberately. If they each had their own copy
@@ -36,6 +37,37 @@ scikit-learn, matplotlib, statsmodels and lightgbm all at once.
 ```bash
 python credit_card_forecast.py --excel yourfile.xlsx
 ```
+
+### No terminal? Use the console interface
+
+If all you have is an IPython console, you never need the command line:
+
+```python
+import os
+os.chdir(r"C:\path\to\timesfm")     # keep the r before the quote
+import console
+
+console.check()                        # are the packages installed?
+console.install()                      # install them, showing the real error
+console.forecast("mydata.xlsx")        # forecast, and return a table
+console.compare("mydata.xlsx")         # which model wins on your data
+console.sweep("mydata.xlsx")           # find the best settings
+```
+
+Every function returns a table you can keep working with, and prints the full
+error if something fails rather than hiding it:
+
+```python
+f = console.forecast("mydata.xlsx", target="net_change", horizon=60)
+f.to_excel("result.xlsx", index=False)
+```
+
+**On installing from a console:** use IPython's `%pip install -r
+requirements-forecasting.txt`, which installs into the Python you are actually
+running. A `subprocess.run(..., check=True)` call raises `CalledProcessError`
+and discards pip's explanation, which is why a failed install shows up as a
+traceback about `subprocess.py` containing no clue. `console.install()` does the
+same job and prints the real message.
 
 For a signed target (purchases **and** payments) using your own growth column:
 
