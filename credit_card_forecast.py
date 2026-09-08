@@ -80,11 +80,13 @@ ap.add_argument("--grid", default="auto",
 ap.add_argument("--growth-col", default=None,
                 help="use this column as the daily change instead of "
                      "recomputing it from the balance")
-ap.add_argument("--model", default="both", choices=["timesfm", "gbm", "both"],
+ap.add_argument("--model", default="both",
+                choices=["timesfm", "gbm", "minirocket", "both", "all"],
                 help="timesfm = the foundation model; gbm = gradient-boosted "
                      "trees on lag and calendar features, the standard strong "
-                     "baseline for daily series; both (default) runs and "
-                     "compares them")
+                     "baseline for daily series; minirocket = random "
+                     "convolutional kernels plus ridge; both (default) = "
+                     "timesfm + gbm; all = every model")
 ap.add_argument("--strategy", default="auto",
                 choices=["auto", "multichannel", "signed-log", "raw"],
                 help="how to model a signed target. auto = multichannel for "
@@ -548,8 +550,91 @@ def gbm_forecast(index, values, horizon):
   return quant[:, 1], quant
 
 
+# ---------------------------------------------------------------- MiniRocket --
+# MINIROCKET (Dempster et al., 2021) is a fixed set of dilated convolutional
+# kernels with weights in {-1, 2}, pooled by the proportion of positive values.
+# It is near state of the art for time-series CLASSIFICATION and is extremely
+# fast. It is not natively a forecaster, so it is applied here by reduction:
+# each training example is a sliding window of the recent past, the transform
+# turns that window into ~10k features, and a ridge regression maps those
+# features to the next `horizon` values at once.
+#
+# Fairness note: the transform sees only the SHAPE of the window, so on its own
+# it knows nothing about dates. Calendar features for the window's end are
+# appended to the ridge input, and multi-output ridge learns separate weights
+# per step, so it can still express "the 14th, three steps out". Without that
+# it would be competing with one hand tied.
+#
+# Its interval is weaker than the other two models': ridge gives a point
+# estimate only, so p10/p90 come from the spread of its own training residuals
+# at each step rather than from a fitted quantile.
+MR_WINDOW = 128
+
+
+def _scale_features(window):
+  """MiniRocket pools by proportion-of-positive-values, which is deliberately
+  blind to magnitude -- ideal for classifying shapes, useless for predicting a
+  level. These put the scale back."""
+  return np.array([
+      window.mean(), window.std(), window[-1], window[-7:].mean(),
+      window[-7:].std(), window[-28:].mean(), window[-28:].sum(),
+      np.percentile(window, 10), np.percentile(window, 90),
+  ], dtype=np.float64)
+
+
+def _origin_calendar(date):
+  dow = np.zeros(7)
+  dow[date.dayofweek] = 1.0
+  return np.concatenate([dow, [
+      np.sin(2 * np.pi * date.day / 31), np.cos(2 * np.pi * date.day / 31),
+      np.sin(2 * np.pi * date.month / 12), np.cos(2 * np.pi * date.month / 12),
+      float(date.day in STATEMENT_DAYS) if STATEMENT_DAYS else 0.0,
+  ]])
+
+
+def minirocket_forecast(index, values, horizon):
+  from sklearn.linear_model import RidgeCV
+  from sktime.transformations.panel.rocket import MiniRocket
+
+  values = np.asarray(values, dtype=np.float32)
+  n = len(values)
+  window = min(MR_WINDOW, max(32, n // 4))
+  if n - window - horizon < 40:
+    raise RuntimeError("not enough history for MiniRocket")
+
+  origins = range(window - 1, n - horizon)
+  windows = np.stack([values[t - window + 1: t + 1] for t in origins])[:, None, :]
+  cal = np.stack([np.concatenate([_origin_calendar(index[t]),
+                                  _scale_features(values[t - window + 1: t + 1])])
+                  for t in origins])
+  Y = np.stack([values[t + 1: t + 1 + horizon] for t in origins])
+
+  transform = MiniRocket(num_kernels=10000, random_state=0).fit(windows)
+  X = np.nan_to_num(np.asarray(transform.transform(windows), dtype=np.float64))
+  X = np.hstack([X, cal])
+
+  # Fitting in a compressed (signed-log) target space was tried and was much
+  # worse: expm1 turns a small log-space error into a large one at the scale a
+  # payment spike lives at. Plain ridge on the raw target it is.
+  ridge = RidgeCV(alphas=np.logspace(-3, 5, 20)).fit(X, Y)
+
+  last = values[n - window:][None, None, :]
+  Xf = np.hstack([np.nan_to_num(np.asarray(transform.transform(last), dtype=np.float64)),
+                  np.concatenate([_origin_calendar(index[n - 1]),
+                                  _scale_features(values[n - window:])])[None, :]])
+  point = ridge.predict(Xf)[0]
+
+  # Interval from in-sample residual spread, per step ahead.
+  resid = Y - ridge.predict(X)
+  lo = np.percentile(resid, 10, axis=0)
+  hi = np.percentile(resid, 90, axis=0)
+  quant = np.sort(np.stack([point + lo, point, point + hi], axis=1), axis=1)
+  return point, quant
+
+
 # ------------------------------------------------------------------ backtest --
-MODELS = ["timesfm", "gbm"] if args.model == "both" else [args.model]
+MODELS = {"both": ["timesfm", "gbm"],
+          "all": ["timesfm", "gbm", "minirocket"]}.get(args.model, [args.model])
 LEVELS3 = np.array([0.1, 0.5, 0.9])
 
 
@@ -557,7 +642,9 @@ def run_model(name, index, values, horizon):
   """(point, quantiles at 0.1/0.5/0.9) for whichever model was asked for."""
   if name == "timesfm":
     point, quant = forecast(index, values, horizon)
-    return point, quant[:, [0, 4, 8]]      # match the GBM's three levels
+    return point, quant[:, [0, 4, 8]]      # match the others' three levels
+  if name == "minirocket":
+    return minirocket_forecast(index, values, horizon)
   return gbm_forecast(index, values, horizon)
 
 
