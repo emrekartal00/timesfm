@@ -22,11 +22,12 @@ WHAT IT DOES, AND WHY
    weekends dropped rather than zero-filled, so a Monday step carries the
    weekend's activity exactly as a row-to-row `growth` column does.
 
-   This was measured, not assumed. On a rolling six-window backtest the
-   business grid beat the calendar grid in five, cutting mean MAE by 37% and
-   payment-day MAE by 72%; the window it lost contained no payments. Weekend
-   zero-rows dilute the series and smear the statement spike. Use
-   --grid calendar to compare on your own data.
+   Which grid is right depends on the export, so it is detected rather than
+   assumed. If the weekend rows carry real spending, they are kept -- dropping
+   them would discard real money. If they are flat padding, they are dropped,
+   because zeros every week dilute the series and smear the statement spike:
+   on a rolling six-window backtest that was worth 37% of mean MAE and 72% of
+   payment-day MAE. Override with --grid business or --grid calendar.
 
 2. Separates the flow from the stock. Balance is a level. Usage is the daily
    change in that level. They are different forecasting problems and mixing
@@ -72,10 +73,10 @@ ap.add_argument("--checkpoint",
                 default=os.environ.get("TIMESFM_CHECKPOINT",
                                        "google/timesfm-3.0-pytorch"))
 ap.add_argument("--device", default=None, help="cuda / mps / cpu (default: auto)")
-ap.add_argument("--grid", default="business", choices=["business", "calendar"],
-                help="business = trading days only, one step per trading day "
-                     "(default, measurably better here). calendar = every day "
-                     "with weekends as zero movement")
+ap.add_argument("--grid", default="auto",
+                choices=["auto", "business", "calendar"],
+                help="auto (default) keeps weekends only if they carry real "
+                     "activity. business = weekdays only. calendar = all 7 days")
 ap.add_argument("--growth-col", default=None,
                 help="use this column as the daily change instead of "
                      "recomputing it from the balance")
@@ -176,16 +177,48 @@ s_raw = df.set_index(date_col)[bal_col]
 # The single window it lost contained no payments at all. Weekend zero-rows
 # dilute the series and smear the statement-day spike across neighbours, so
 # business days are the default here.
-if args.grid == "business":
+# Whether to keep weekends is not a matter of taste, and it is not the same
+# answer for every export. It depends on one fact about the data: do the
+# weekend rows carry real spending, or are they padding?
+#
+#   no weekend rows at all      -> nothing to drop. A Monday step already
+#                                  carries the weekend, exactly as a row-to-row
+#                                  growth column does.
+#   weekend rows, but flat      -> zeros every week dilute the series and smear
+#                                  the statement spike. Drop them.
+#   weekend rows with activity  -> the card is genuinely used at weekends and
+#                                  the bank posts daily. Dropping them would
+#                                  throw away real money. Keep all 7 days.
+grid_mode = args.grid
+if grid_mode == "auto":
+  if weekend_rows == 0:
+    grid_mode = "business"
+    print("\nauto: no weekend rows in the sheet -> business days")
+  else:
+    wk = s_raw.diff().loc[s_raw.index.dayofweek >= 5]
+    scale = max(s_raw.diff().abs().median(), 1e-9)
+    active = float((wk.abs() > 0.05 * scale).mean())
+    if active > 0.10:
+      grid_mode = "calendar"
+      print(f"\nauto: {weekend_rows:,} weekend rows and {active:.0%} of them "
+            f"carry real movement")
+      print("  -> keeping all 7 days; dropping them would discard real spending")
+    else:
+      grid_mode = "business"
+      print(f"\nauto: {weekend_rows:,} weekend rows but only {active:.0%} "
+            f"carry movement")
+      print("  -> they are padding; dropping them so the weekly pattern is cleaner")
+
+if grid_mode == "business":
   grid = pd.bdate_range(s_raw.index.min(), s_raw.index.max())
-  print(f"\ngrid: business days -> {len(grid):,} steps "
+  print(f"grid: business days -> {len(grid):,} steps "
         f"(one step = one trading day)")
   print("  weekends are dropped rather than zero-filled; a Monday step")
   print("  therefore carries the whole weekend's activity, exactly like your")
   print("  growth column does")
 else:
   grid = pd.date_range(s_raw.index.min(), s_raw.index.max(), freq="D")
-  print(f"\ngrid: every calendar day -> {len(grid):,} steps")
+  print(f"grid: every calendar day -> {len(grid):,} steps")
 
 # A balance is a stock: on a day with no record it simply has not changed.
 balance = s_raw.reindex(s_raw.index.union(grid)).ffill().reindex(grid)
@@ -239,7 +272,7 @@ print(f"\ntarget: {args.target}")
 
 def future_index(last, n):
   """The next n steps on whichever grid is in use."""
-  if args.grid == "business":
+  if grid_mode == "business":
     return pd.bdate_range(last + pd.Timedelta(days=1), periods=n)
   return pd.date_range(last + pd.Timedelta(days=1), periods=n, freq="D")
 
@@ -488,7 +521,7 @@ print(result.head(14).to_string(index=False,
 if len(result) > 14:
   print(f"... {len(result) - 14} more rows")
 
-unit = "business days" if args.grid == "business" else "days"
+unit = "business days" if grid_mode == "business" else "days"
 print(f"\nTotal over {args.horizon} {unit} "
       f"({future[0]:%Y-%m-%d} to {future[-1]:%Y-%m-%d}): {point.sum():,.0f}")
 print(f"  80% interval: {quantiles[:, 0].sum():,.0f} to {quantiles[:, 8].sum():,.0f}")
