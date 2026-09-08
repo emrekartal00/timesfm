@@ -155,6 +155,22 @@ def load(excel, sheet=0, date_col=None, balance_col=None, currency_col=None,
     if stmt:
       notes.append(f"payments recur on days of month {sorted(stmt)}")
 
+  # Say plainly whether the holiday and schedule covariates are live. Both fail
+  # quietly if the package is missing or the country code is wrong, and a silent
+  # failure here cost 42% of accuracy in testing.
+  if S.USE_HOLIDAYS and S.HOLIDAY_COUNTRY:
+    found = holiday_dates(grid_index)
+    inside = sum(1 for d in found if grid_index[0].date() <= d <= grid_index[-1].date())
+    if inside:
+      notes.append(f"holidays: {inside} {S.HOLIDAY_COUNTRY} public holidays in range")
+    else:
+      notes.append(f"holidays: NONE found for {S.HOLIDAY_COUNTRY!r} -- is the "
+                   f"`holidays` package installed? covariate is doing nothing")
+  if S.USE_SCHEDULED_PAYMENT_DAYS and S.PAYMENT_DAYS_OF_MONTH:
+    notes.append(f"scheduled payment days: {list(S.PAYMENT_DAYS_OF_MONTH)} "
+                 f"(plus the working day either side when one falls on a "
+                 f"weekend or holiday)")
+
   return Series(grid_index, balance, net, purchases, payments, stmt, mode, chosen, notes)
 
 
