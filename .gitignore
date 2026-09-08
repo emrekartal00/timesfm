@@ -27,3 +27,15 @@ uv.lock
 development_setup.md
 debug.log
 *.log
+
+# Local forecasting inputs and outputs -- this fork is public, and these can
+# contain real financial data. Do not commit them.
+forecast.csv
+forecast.png
+*.xlsx
+*.xls
+*.csv.gz
+transfer/
+model.safetensors
+*.safetensors
+*.part-*
