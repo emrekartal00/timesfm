@@ -3,7 +3,7 @@ Forecast credit-card usage from an Excel sheet, and report the seasonality in
 the history.
 
     python credit_card_forecast.py --excel cards.xlsx
-    python credit_card_forecast.py --excel cards.xlsx --target net_change --growth-col growth
+    python credit_card_forecast.py --excel cards.xlsx --target growth
     python credit_card_forecast.py --excel cards.xlsx --model gbm --rolling 6 --plot
 
 All the data handling and both models live in cc_lib.py, which sweep.py also
@@ -33,7 +33,11 @@ src.add_argument("--currency-col", default=None, help="override the currency col
 src.add_argument("--currency", default=None, help="which currency to model")
 src.add_argument("--growth-col", default=None, help="name of the growth column")
 src.add_argument("--use-growth", action="store_true",
-                 help="trust the sheet's growth column instead of recomputing")
+                 help="READ the daily change from the sheet's growth column "
+                      "instead of recomputing it from the balance. This is NOT "
+                      "how you ask for a growth forecast -- that is "
+                      "--target growth. You rarely need this; the script says "
+                      "so when it would change nothing")
 src.add_argument("--grid", default=S.DEFAULT_GRID, choices=["auto", "business", "calendar"],
                  help="auto (default) keeps weekends only if they carry activity")
 

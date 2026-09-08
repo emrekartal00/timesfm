@@ -2,7 +2,7 @@
 Run many TimesFM and LightGBM configurations over the same rolling backtest and
 rank them, so the choice between them is measured rather than argued.
 
-    python sweep.py --excel cards.xlsx --target net_change --use-growth
+    python sweep.py --excel cards.xlsx --target growth
     python sweep.py --excel cards.xlsx --preset full --origins 6
     python sweep.py --excel cards.xlsx --only gbm --horizon 14
 
@@ -40,9 +40,11 @@ ap.add_argument("--date-col", default=None)
 ap.add_argument("--balance-col", default=None)
 ap.add_argument("--currency", default=None)
 ap.add_argument("--growth-col", default=None)
-ap.add_argument("--use-growth", action="store_true")
+ap.add_argument("--use-growth", action="store_true",
+                help="read the daily change from the sheet's column rather "
+                     "than recomputing it. Not the same as --target growth")
 ap.add_argument("--grid", default="auto", choices=["auto", "business", "calendar"])
-ap.add_argument("--target", default="net_change",
+ap.add_argument("--target", default="growth",
                 choices=["purchases", "net_change", "growth", "balance"])
 ap.add_argument("--horizon", type=int, default=30)
 ap.add_argument("--origins", type=int, default=5,

@@ -24,7 +24,7 @@ Each function prints a report and hands back a table you can keep looking at:
 
 Every option from settings.py works here too, by name. For example:
 
-    console.forecast("mydata.xlsx", target="net_change", horizon=60)
+    console.forecast("mydata.xlsx", target="growth", horizon=60)
 
 If something goes wrong the error is printed in full rather than hidden.
 ==============================================================================
@@ -109,7 +109,7 @@ def _load(excel, **kw):
 def forecast(excel, target=None, horizon=None, model="timesfm", **kw):
   """Forecast, print a summary, and return the result as a table.
 
-      f = console.forecast("mydata.xlsx", target="net_change", horizon=30)
+      f = console.forecast("mydata.xlsx", target="growth", horizon=30)
 
   model can be "timesfm" or "gbm".
   """
@@ -144,7 +144,7 @@ def forecast(excel, target=None, horizon=None, model="timesfm", **kw):
 def compare(excel, target=None, horizon=None, origins=None, **kw):
   """Score TimesFM against the gradient-boosted model on your own data.
 
-      console.compare("mydata.xlsx", target="net_change", origins=6)
+      console.compare("mydata.xlsx", target="growth", origins=6)
 
   Read MAE (lower is better) together with coverage, which should be near 80%.
   A model with the lowest MAE and 50% coverage is not better -- it is a sharper
@@ -184,7 +184,7 @@ def compare(excel, target=None, horizon=None, origins=None, **kw):
 def sweep(excel, target=None, horizon=None, origins=3, only="both", **kw):
   """Try many settings and rank them, so you can stop guessing.
 
-      s = console.sweep("mydata.xlsx", target="net_change", only="gbm")
+      s = console.sweep("mydata.xlsx", target="growth", only="gbm")
 
   Copy the winning values into settings.py.
   """

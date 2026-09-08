@@ -68,7 +68,7 @@ Every function returns a table you can keep working with, and prints the full
 error if something fails rather than hiding it:
 
 ```python
-f = console.forecast("mydata.xlsx", target="net_change", horizon=60)
+f = console.forecast("mydata.xlsx", target="growth", horizon=60)
 f.to_excel("result.xlsx", index=False)
 ```
 
@@ -83,14 +83,13 @@ For a signed target (purchases **and** payments) using your own growth column:
 
 ```bash
 python credit_card_forecast.py --excel yourfile.xlsx \
-    --target net_change --growth-col growth --use-growth \
-    --horizon 30 --rolling 6 --plot
+    --target growth --horizon 30 --rolling 6 --plot
 ```
 
 Then find the best settings for *your* data:
 
 ```bash
-python sweep.py --excel yourfile.xlsx --target net_change --use-growth --origins 6
+python sweep.py --excel yourfile.xlsx --target growth --origins 6
 ```
 
 and rerun `credit_card_forecast.py` with whatever won.
@@ -200,7 +199,7 @@ your sheet has several, one is chosen and reported; use `--currency` to pick.
 | `--rounds N` | `300` | GBM | boosting iterations |
 
 `--strategy` only matters for a signed target. `auto` picks `multichannel` for
-`net_change`, which forecasts purchases, payments and balance as three joint
+`growth`, which forecasts purchases, payments and balance as three joint
 channels and recombines them. Balance is in there because payment size depends
 on what has accumulated, which is what lets the model anticipate the spike.
 

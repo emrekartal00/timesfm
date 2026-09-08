@@ -240,7 +240,7 @@ TIMESFM_STRATEGY = "auto"
 # How TimesFM handles a target that goes negative. Quotes required.
 #   "auto"          pick automatically. Recommended.
 #   "multichannel"  forecast spending, payments and balance together, then
-#                   combine. What "auto" chooses for "net_change", and the best
+#                   combine. What "auto" chooses for "growth", and the best
 #                   performer in testing.
 #   "raw"           forecast the signed series directly. Simplest.
 #   "signed-log"    squash the big payment spikes before forecasting.
