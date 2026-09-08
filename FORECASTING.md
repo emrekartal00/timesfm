@@ -7,7 +7,8 @@ on real runs, not assumed.
 |---|---|
 | `credit_card_forecast.py` | **Start here.** One run: seasonality report, backtest, forecast, CSV, plot. |
 | `sweep.py` | Runs many configurations of both models over the same backtest and ranks them. |
-| `cc_lib.py` | The shared library both scripts import. Edit this to change behaviour. |
+| `settings.py` | **Every knob, in plain English with examples.** Edit this, not the code. |
+| `cc_lib.py` | The shared library both scripts import. Only edit for new behaviour. |
 | `timesfm_guide.py` | Unrelated to card data: an annotated tour of the raw TimesFM API. |
 
 The two scripts share `cc_lib.py` deliberately. If they each had their own copy
@@ -133,7 +134,59 @@ on what has accumulated, which is what lets the model anticipate the spike.
 
 ---
 
-## 4. `sweep.py` arguments
+## 4. Changing things without touching code — `settings.py`
+
+`settings.py` is a plain list of named values, each with a sentence explaining
+what it does and an example. Edit a value, save, rerun. Nothing else needs
+touching, and if you break it the script errors out without changing anything.
+To undo everything: `git checkout settings.py`.
+
+Two rules: `True` and `False` are capitalised exactly like that, and words need
+quotes (`"business"`) while numbers do not (`31`).
+
+It has five parts.
+
+**Part 1 — which calendar facts the models get.** Ten covariates behind six
+on/off switches. This is the biggest lever in the pipeline. Switching off just
+two of them made TimesFM 84% worse in testing:
+
+| | error | payment-day error |
+|---|---|---|
+| all covariates on | **1,180** | **3,603** |
+| day-of-month and statement-day off | 2,175 | 12,849 |
+
+**Part 2 — calibrating GBM.** The four settings that matter, each with a
+sensible range and which direction to move it. The section explains overfitting
+in plain terms: the model memorises your history, looks brilliant on old data,
+forecasts badly. The tell is a low coverage number with `--rolling 6`.
+
+**Part 3 — what GBM looks back at.** Which previous days it sees (`GBM_LAGS`)
+and over what stretches it summarises (`GBM_WINDOWS`), with examples for weekly
+rather than daily data.
+
+**Part 4 — defaults for your data**, so you stop retyping the same flags.
+
+**Part 5 — TimesFM settings**: strategy, how much history to use, rescaling.
+
+Anything you set here can still be overridden for one run from the command
+line, and each comment names the flag that does it.
+
+### Calibrating GBM without guessing
+
+Do not tune by hand. Run the sweep and read the table:
+
+```bash
+python sweep.py --excel yourfile.xlsx --only gbm --origins 6
+```
+
+It tries the combinations and ranks them. Copy the winner into `settings.py`.
+That is the whole method. In testing it found `num_leaves=15` beat the default
+`31` (error 1,055 against 1,117) — a smaller, simpler model generalising better,
+which is the usual answer.
+
+---
+
+## 5. `sweep.py` arguments
 
 Everything in the Input section above works here too, plus:
 
@@ -155,7 +208,7 @@ To change what is swept, edit `TIMESFM_GRID` and `GBM_GRID` at the top of
 
 ---
 
-## 5. Reading the numbers
+## 6. Reading the numbers
 
 | metric | meaning |
 |---|---|
@@ -174,7 +227,7 @@ crosses zero; it rated the *worst* model best in testing.
 
 ---
 
-## 6. What the measurements showed
+## 7. What the measurements showed
 
 On synthetic data shaped like a card statement, over rolling origins:
 
@@ -203,7 +256,7 @@ dropped from the CLI; the implementation is in git history at commit `a04b108`.
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 **`No module named timesfm3`** — you cloned but did not install, or your IDE
 uses a different interpreter. See `SETUP-LOCAL.md`.

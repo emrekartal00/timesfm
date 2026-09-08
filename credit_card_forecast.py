@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 import cc_lib as L
+import settings as S
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -33,28 +34,28 @@ src.add_argument("--currency", default=None, help="which currency to model")
 src.add_argument("--growth-col", default=None, help="name of the growth column")
 src.add_argument("--use-growth", action="store_true",
                  help="trust the sheet's growth column instead of recomputing")
-src.add_argument("--grid", default="auto", choices=["auto", "business", "calendar"],
+src.add_argument("--grid", default=S.DEFAULT_GRID, choices=["auto", "business", "calendar"],
                  help="auto (default) keeps weekends only if they carry activity")
 
 what = ap.add_argument_group("what to forecast")
-what.add_argument("--target", default="purchases",
+what.add_argument("--target", default=S.DEFAULT_TARGET,
                   choices=["purchases", "net_change", "balance"])
-what.add_argument("--horizon", type=int, default=30, help="steps ahead")
+what.add_argument("--horizon", type=int, default=S.DEFAULT_HORIZON, help="steps ahead")
 
 mdl = ap.add_argument_group("models")
 mdl.add_argument("--model", default="both", choices=["timesfm", "gbm", "both"])
-mdl.add_argument("--strategy", default="auto",
+mdl.add_argument("--strategy", default=S.TIMESFM_STRATEGY,
                  choices=["auto", "multichannel", "signed-log", "raw"],
                  help="TimesFM only: how to handle a signed target")
 mdl.add_argument("--no-covariates", action="store_true", help="TimesFM only")
 mdl.add_argument("--znorm", action="store_true", help="TimesFM only")
-mdl.add_argument("--context", type=int, default=None,
+mdl.add_argument("--context", type=int, default=S.TIMESFM_CONTEXT,
                  help="TimesFM only: cap the history fed to the model")
 mdl.add_argument("--checkpoint", default=None, help="TimesFM weights path or repo id")
 mdl.add_argument("--device", default=None, help="cuda / mps / cpu")
-mdl.add_argument("--num-leaves", type=int, default=31, help="GBM only")
-mdl.add_argument("--learning-rate", type=float, default=0.05, help="GBM only")
-mdl.add_argument("--rounds", type=int, default=300, help="GBM only")
+mdl.add_argument("--num-leaves", type=int, default=S.GBM_NUM_LEAVES, help="GBM only")
+mdl.add_argument("--learning-rate", type=float, default=S.GBM_LEARNING_RATE, help="GBM only")
+mdl.add_argument("--rounds", type=int, default=S.GBM_ROUNDS, help="GBM only")
 
 out = ap.add_argument_group("evaluation and output")
 out.add_argument("--rolling", type=int, default=0, metavar="N",

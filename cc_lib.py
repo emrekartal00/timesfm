@@ -16,6 +16,8 @@ import os
 import numpy as np
 import pandas as pd
 
+import settings as S
+
 QUANTILE_LEVELS = np.array([0.1, 0.5, 0.9])
 
 
@@ -197,27 +199,37 @@ def calendar_covariates(index, statement_days):
   as integers, Sunday=7 and Monday=1 look maximally far apart when adjacent.
   """
   dow, dom, month = index.dayofweek.to_numpy(), index.day.to_numpy(), index.month.to_numpy()
-  return np.stack([
-      np.sin(2 * np.pi * dow / 7), np.cos(2 * np.pi * dow / 7),
-      np.sin(2 * np.pi * dom / 31), np.cos(2 * np.pi * dom / 31),
-      np.sin(2 * np.pi * month / 12), np.cos(2 * np.pi * month / 12),
-      (dow >= 5).astype(float),
-      index.is_month_end.astype(float),
-      index.is_month_start.astype(float),
-      np.isin(dom, list(statement_days)).astype(float) if statement_days else np.zeros(len(index)),
-  ]).astype(np.float32)
+  feats = []
+  if S.USE_DAY_OF_WEEK:
+    feats += [np.sin(2 * np.pi * dow / 7), np.cos(2 * np.pi * dow / 7)]
+  if S.USE_DAY_OF_MONTH:
+    feats += [np.sin(2 * np.pi * dom / 31), np.cos(2 * np.pi * dom / 31)]
+  if S.USE_MONTH_OF_YEAR:
+    feats += [np.sin(2 * np.pi * month / 12), np.cos(2 * np.pi * month / 12)]
+  if S.USE_WEEKEND_FLAG:
+    feats.append((dow >= 5).astype(float))
+  if S.USE_MONTH_EDGES:
+    feats += [index.is_month_end.astype(float), index.is_month_start.astype(float)]
+  if S.USE_STATEMENT_DAYS:
+    feats.append(np.isin(dom, list(statement_days)).astype(float)
+                 if statement_days else np.zeros(len(index)))
+  if not feats:
+    # Every switch in settings.py PART 1 is off. Hand back a single flat row so
+    # the model still runs; it simply learns nothing from the calendar.
+    feats = [np.zeros(len(index))]
+  return np.stack(feats).astype(np.float32)
 
 
 @dataclasses.dataclass
 class TimesFMParams:
-  strategy: str = "auto"          # auto | multichannel | signed-log | raw
+  strategy: str = S.TIMESFM_STRATEGY   # auto | multichannel | signed-log | raw
   covariates: bool = True
-  znorm: bool = False
+  znorm: bool = S.TIMESFM_ZNORM
   make_positive: bool = False
   batch_size: int = 8
   device: str | None = None
   checkpoint: str = os.environ.get("TIMESFM_CHECKPOINT", "google/timesfm-3.0-pytorch")
-  context: int | None = None      # cap on how much history to feed
+  context: int | None = S.TIMESFM_CONTEXT   # cap on history fed to the model
 
 
 def timesfm_forecast(data, target, upto, horizon, p: TimesFMParams):
@@ -267,13 +279,13 @@ def timesfm_forecast(data, target, upto, horizon, p: TimesFMParams):
 
 @dataclasses.dataclass
 class GBMParams:
-  lags: tuple = (1, 2, 3, 4, 5, 6, 7, 10, 14, 21, 28, 35)
-  windows: tuple = (7, 14, 28)
-  num_leaves: int = 31
-  learning_rate: float = 0.05
-  rounds: int = 300
-  min_data_in_leaf: int = 20
-  feature_fraction: float = 0.9
+  lags: tuple = S.GBM_LAGS
+  windows: tuple = S.GBM_WINDOWS
+  num_leaves: int = S.GBM_NUM_LEAVES
+  learning_rate: float = S.GBM_LEARNING_RATE
+  rounds: int = S.GBM_ROUNDS
+  min_data_in_leaf: int = S.GBM_MIN_DATA_IN_LEAF
+  feature_fraction: float = S.GBM_FEATURE_FRACTION
 
 
 def _origin_features(values, t, p: GBMParams):
