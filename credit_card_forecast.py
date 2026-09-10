@@ -48,7 +48,8 @@ what.add_argument("--target", default=S.DEFAULT_TARGET,
 what.add_argument("--horizon", type=int, default=S.DEFAULT_HORIZON, help="steps ahead")
 
 mdl = ap.add_argument_group("models")
-mdl.add_argument("--model", default="both", choices=["timesfm", "gbm", "both"])
+mdl.add_argument("--model", default=S.DEFAULT_MODEL,
+                 choices=["timesfm", "gbm", "both"])
 mdl.add_argument("--strategy", default=S.TIMESFM_STRATEGY,
                  choices=["auto", "multichannel", "signed-log", "raw"],
                  help="TimesFM only: how to handle a signed target")

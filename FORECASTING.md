@@ -7,6 +7,7 @@ on real runs, not assumed.
 |---|---|
 | `credit_card_forecast.py` | **Start here.** One run: seasonality report, backtest, forecast, CSV, plot. |
 | `sweep.py` | Runs many configurations of both models over the same backtest and ranks them. |
+| `explore.py` | Describes the data: trend, the four seasonal cycles, holidays, outliers. No forecasting. |
 | `settings.py` | **Every knob, in plain English with examples.** Edit this, not the code. |
 | `cc_lib.py` | The shared library both scripts import. Only edit for new behaviour. |
 | `timesfm_guide.py` | Unrelated to card data: an annotated tour of the raw TimesFM API. |
@@ -78,7 +79,37 @@ the quote on Windows:
 %run credit_card_forecast.py --excel r"C:\Users\you\Desktop\cards.xlsx" --target growth
 ```
 
-## 3. What the script does to your data
+## 3. Looking at the data first — `explore.py`
+
+```bash
+python explore.py --excel yourfile.xlsx --target growth --plot
+```
+
+Nothing here forecasts; it describes. Eight sections: the data itself, whether
+the level is drifting, the strength of each seasonal cycle, then the weekly,
+monthly and yearly profiles, holidays, and outliers. Run it before trusting any
+forecast, and again whenever one looks wrong — most bad forecasts are bad data.
+
+**Seasonal strength** is the share of the wobble a cycle explains once the trend
+is removed: 0 means absent, 1 means the series is nothing else. All four cycles
+are separated at once with MSTL, so a weekly rhythm is not confused for a
+monthly one.
+
+The section to check first is the monthly one. It lists the days of the month
+where settlements actually land, alongside what `PAYMENT_DAYS_OF_MONTH` claims,
+and says so when they disagree:
+
+```
+Days of the month where a settlement usually happens:
+  day 24     73% of months
+  day  4     70% of months
+  day 14     68% of months
+settings.py has PAYMENT_DAYS_OF_MONTH = [4, 14, 24]
+```
+
+`--plot` writes `explore.png`; `--out parts.csv` saves the decomposed cycles.
+
+## 4. What the script does to your data
 
 ### `--target growth` and `--use-growth` are not the same thing
 
@@ -132,7 +163,7 @@ knowable in advance.
 
 ---
 
-## 4. `credit_card_forecast.py` arguments
+## 5. `credit_card_forecast.py` arguments
 
 ### Input
 
@@ -204,7 +235,7 @@ on what has accumulated, which is what lets the model anticipate the spike.
 
 ---
 
-## 5. Changing things without touching code — `settings.py`
+## 6. Changing things without touching code — `settings.py`
 
 `settings.py` is a plain list of named values, each with a sentence explaining
 what it does and an example. Edit a value, save, rerun. Nothing else needs
@@ -311,7 +342,7 @@ which is the usual answer.
 
 ---
 
-## 6. `sweep.py` arguments
+## 7. `sweep.py` arguments
 
 Everything in the Input section above works here too, plus:
 
@@ -333,7 +364,7 @@ To change what is swept, edit `TIMESFM_GRID` and `GBM_GRID` at the top of
 
 ---
 
-## 7. Reading the numbers
+## 8. Reading the numbers
 
 | metric | in plain terms | why this one |
 |---|---|---|
@@ -397,7 +428,7 @@ crosses zero; it rated the *worst* model best in testing.
 
 ---
 
-## 8. What the measurements showed
+## 9. What the measurements showed
 
 On synthetic data shaped like a card statement, over rolling origins:
 
@@ -426,7 +457,7 @@ dropped from the CLI; the implementation is in git history at commit `a04b108`.
 
 ---
 
-## 9. Improving a poor result
+## 10. Improving a poor result
 
 In the order that has actually paid off:
 
@@ -457,7 +488,7 @@ spending side, it forecasts considerably better.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 **`No module named timesfm3`** — you cloned but did not install, or your IDE
 uses a different interpreter. Install from inside the console with

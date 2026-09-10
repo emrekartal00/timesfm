@@ -276,6 +276,11 @@ GBM_WINDOWS = (7, 14, 28)
 # These save you retyping the same command-line flags every time. Whatever you
 # type on the command line still wins over what is written here.
 
+DEFAULT_MODEL = "gbm"
+# Which model to use by default: "gbm", "timesfm", or "both" to run them side
+# by side. Quotes required.
+# Command line: --model both
+
 DEFAULT_TARGET = "purchases"
 # WHAT to forecast. Quotes required.
 #   "purchases"   spending only. Payments are stripped out.

@@ -52,7 +52,8 @@ ap.add_argument("--origins", type=int, default=5,
                 help="rolling origins per configuration (more = slower, surer)")
 ap.add_argument("--preset", default="quick", choices=["quick", "full"],
                 help="quick = a handful of configs; full = the whole grid")
-ap.add_argument("--only", default="both", choices=["timesfm", "gbm", "both"])
+ap.add_argument("--only", default=S.DEFAULT_MODEL,
+                choices=["timesfm", "gbm", "both"])
 ap.add_argument("--sort", default="pinball", choices=["mae", "pinball", "coverage"])
 ap.add_argument("--out", default="sweep_results.csv")
 ap.add_argument("--checkpoint", default=None)
