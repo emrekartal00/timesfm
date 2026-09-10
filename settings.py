@@ -185,6 +185,35 @@ GBM_FEATURE_FRACTION = 0.9
 # Sensible range: 0.5 to 1.0.
 
 
+DEFLATOR_FILE = None
+# Adjust for inflation using REAL price figures, rather than guessing the drift
+# from your own numbers.
+#
+# None (no quotes) means off. Otherwise give the path to a small file:
+#     DEFLATOR_FILE = r"C:\Users\you\Desktop\tufe.csv"
+#
+# The file needs two columns, a date and an index value, in any order and with
+# any headings. Monthly is fine -- values in between are filled in. A TUIK TUFE
+# export works as-is. So does ENAG, or any other index you trust more; the file
+# is yours, so the choice of index is yours.
+#
+#     date,index
+#     2019-01-01,100.0
+#     2019-02-01,101.6
+#     ...
+#
+# HOW IT DIFFERS FROM RESCALE_WINDOW. Both remove inflation, but not the same
+# way. RESCALE_WINDOW divides by how big a typical day was at the time, which
+# removes ALL growth -- if your business genuinely doubled in real terms, that
+# is erased along with the price rises. A price index removes only the price
+# rises and leaves real growth in, which is usually the part you want the model
+# to learn. Prefer this when you have the figures.
+#
+# Everything is measured against the LAST date in your history, so the forecast
+# comes back in today's lira. Past the end of your index file, prices are
+# extended at the average monthly rate of its final year, and that assumption
+# is printed so you can see what was assumed.
+
 SKIP_FIRST_STEPS = 1
 # How many steps to drop from the very start.
 #

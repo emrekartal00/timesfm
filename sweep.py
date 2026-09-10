@@ -56,6 +56,9 @@ ap.add_argument("--only", default=S.DEFAULT_MODEL,
                 choices=["timesfm", "gbm", "both"])
 ap.add_argument("--sort", default="pinball", choices=["mae", "pinball", "coverage"])
 ap.add_argument("--out", default="sweep_results.csv")
+ap.add_argument("--deflator", default=None, metavar="FILE",
+                help="price index file (date + index columns) to divide out "
+                     "inflation with. Overrides DEFLATOR_FILE in settings.py")
 ap.add_argument("--checkpoint", default=None)
 ap.add_argument("--device", default=None)
 args = ap.parse_args()
@@ -125,10 +128,10 @@ if args.only in ("timesfm", "both"):
   if args.device:
     extra["device"] = args.device
   for cfg in expand(TIMESFM_GRID[args.preset]):
-    jobs.append(("timesfm", cfg, L.TimesFMParams(**cfg, **extra)))
+    jobs.append(("timesfm", cfg, L.TimesFMParams(**cfg, deflator=args.deflator, **extra)))
 if args.only in ("gbm", "both"):
   for cfg in expand(GBM_GRID[args.preset]):
-    jobs.append(("gbm", cfg, L.GBMParams(**cfg)))
+    jobs.append(("gbm", cfg, L.GBMParams(**cfg, deflator=args.deflator)))
 
 print(f"\n{len(jobs)} configurations x {args.origins} origins "
       f"x horizon {args.horizon}\n")

@@ -487,6 +487,33 @@ multiplied back by today's scale, so the answer comes out in lira.
 
 The median is used rather than the mean, so settlement spikes do not inflate the
 scale, and it is shifted one day so a value never helps set its own scale.
+
+**Better, if you have the figures: use a real price index.** `--deflator
+tufe.csv`, or `DEFLATOR_FILE` in `settings.py`. The file needs two columns, a
+date and an index value, at any frequency — monthly TÜFE works as-is, and so
+does ENAG or any index you trust more, since the file is yours.
+
+```
+date,index
+2019-01-01,100.0
+2019-02-01,101.0
+```
+
+The difference matters. `--rescale` divides by how big a typical day was, which
+removes **all** growth — if the business genuinely doubled in real terms, that
+is erased along with the price rises. A price index removes only the price
+rises and leaves real growth for the model to learn. Measured over three
+origins on a series where prices rose 10x:
+
+| inflation handling | MAE | pinball | coverage |
+|---|---|---|---|
+| off | 575,870,157 | 201,791,729 | 78% |
+| **price index** | **537,158,215** | **161,603,852** | 84% |
+| trailing scale | 553,317,200 | 169,631,995 | 88% |
+
+Past the end of your index file, prices are extended at the average monthly rate
+of its final year, and that assumed rate is reported. Everything is measured
+against the last date in your history, so forecasts come back in today's lira.
  That
 pattern means the old data is hurting: a normal day years ago is not a normal
 day now. `RESCALE_WINDOW = 90` divides every day by how big a typical day was at

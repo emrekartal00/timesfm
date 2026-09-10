@@ -376,6 +376,7 @@ class TimesFMParams:
   make_positive: bool = False
   batch_size: int = 8
   rescale: int | None = None      # None = use settings.RESCALE_WINDOW
+  deflator: str | None = None     # None = use settings.DEFLATOR_FILE
   device: str | None = S.TIMESFM_DEVICE
   offline: bool = S.TIMESFM_OFFLINE
   # Where the weights come from, in order of precedence: --checkpoint on the
@@ -447,6 +448,7 @@ class GBMParams:
   min_data_in_leaf: int = S.GBM_MIN_DATA_IN_LEAF
   feature_fraction: float = S.GBM_FEATURE_FRACTION
   rescale: int | None = None      # None = use settings.RESCALE_WINDOW
+  deflator: str | None = None     # None = use settings.DEFLATOR_FILE
 
 
 def _origin_features(values, t, p: GBMParams):
@@ -529,6 +531,70 @@ def gbm_forecast(data, target, upto, horizon, p: GBMParams):
   return quant[:, 1], quant
 
 
+def load_deflator(path, index, horizon=0, grid_mode="calendar"):
+  """A price index aligned to `index`, plus `horizon` steps beyond it.
+
+  Takes a CSV or Excel file with a date column and an index column, in either
+  order, at any frequency -- monthly CPI is the usual case. Values between the
+  supplied dates are interpolated, so a monthly index becomes a daily one.
+
+  Everything is expressed relative to the LAST date in the history, so a
+  deflated series is in today's money and a forecast comes back in today's
+  money too.
+
+  Beyond the history the index is extended at the average monthly rate of the
+  last year, because a forecast in future lira needs a view on future prices.
+  That extrapolation is a guess and is reported as one.
+  """
+  frame = (pd.read_excel(path) if str(path).lower().endswith((".xls", ".xlsx"))
+           else pd.read_csv(path))
+  if frame.shape[1] < 2:
+    raise ValueError(f"{path} needs two columns: a date and an index value")
+
+  dates, values = None, None
+  for col in frame.columns:
+    parsed = pd.to_datetime(frame[col], errors="coerce")
+    if parsed.notna().mean() > 0.8:
+      dates = parsed
+      break
+  if dates is None:
+    raise ValueError(f"No date column found in {path}. Columns: {list(frame.columns)}")
+  for col in frame.columns:
+    numeric = pd.to_numeric(frame[col], errors="coerce")
+    if numeric.notna().mean() > 0.8 and not numeric.equals(pd.to_numeric(dates, errors="coerce")):
+      values = numeric
+      break
+  if values is None:
+    raise ValueError(f"No numeric index column found in {path}")
+
+  cpi = pd.Series(values.to_numpy(), index=dates).dropna().sort_index()
+  if (cpi <= 0).any():
+    raise ValueError("The price index contains zero or negative values")
+
+  future = future_index(index[-1], horizon, grid_mode) if horizon else index[:0]
+  span = index.append(future)
+  # Interpolate across the whole span, then hold the ends flat rather than
+  # letting interpolation invent values before the index starts.
+  merged = cpi.reindex(cpi.index.union(span)).interpolate(method="time")
+  aligned = merged.reindex(span).ffill().bfill()
+
+  # Anything past the supplied data is extrapolated at last year's pace.
+  last_known = cpi.index.max()
+  beyond = span > last_known
+  rate = np.nan
+  if beyond.any():
+    recent = cpi[cpi.index >= last_known - pd.Timedelta(days=365)]
+    if len(recent) >= 2:
+      months = max((recent.index[-1] - recent.index[0]).days / 30.44, 1e-6)
+      rate = (recent.iloc[-1] / recent.iloc[0]) ** (1 / months) - 1
+      days = (span[beyond] - last_known).days.to_numpy()
+      aligned = aligned.copy()
+      aligned[beyond] = cpi.loc[last_known] * (1 + rate) ** (days / 30.44)
+
+  aligned = aligned / float(aligned.loc[index[-1]])   # 1.0 at today
+  return aligned, float(rate), last_known
+
+
 def trailing_scale(values, window):
   """The typical size of the series as of each step, using only the past.
 
@@ -564,18 +630,42 @@ def _raw_forecast(model, data, target, upto, horizon, params):
   raise ValueError(f"unknown model {model!r}")
 
 
+def _adjusted_forecast(model, data, target, upto, horizon, params):
+  """Forecast with whichever inflation adjustment is configured, undone after.
+
+  Exactly one applies. A price index is preferred when available because it
+  removes price rises only, leaving real growth for the model to learn; the
+  trailing scale removes all drift including real growth.
+  """
+  deflator = getattr(params, "deflator", None) or S.DEFLATOR_FILE
+  if deflator:
+    infl, _, _ = load_deflator(deflator, data.index, horizon, data.grid_mode)
+    hist = infl.iloc[:len(data.index)].to_numpy()
+    ahead = infl.iloc[len(data.index):].to_numpy()
+    point, quant = _raw_forecast(model, _rescaled(data, hist), target,
+                                 upto, horizon, params)
+    factor = ahead[:horizon] if len(ahead) >= horizon else np.ones(horizon)
+    return point * factor, quant * factor[:, None]
+
+  window = getattr(params, "rescale", None)
+  window = S.RESCALE_WINDOW if window is None else window
+  if window:
+    scale = trailing_scale(data.target(target).to_numpy(), window)
+    here = float(scale[upto - 1])
+    point, quant = _raw_forecast(model, _rescaled(data, scale), target,
+                                 upto, horizon, params)
+    return point * here, quant * here
+
+  return _raw_forecast(model, data, target, upto, horizon, params)
+
+
 def _conformal_width(model, data, target, upto, horizon, params, origins):
-  """How much the p10-p90 interval has to widen to actually cover 80%.
+  """How much the interval has to widen to actually reach TARGET_COVERAGE.
 
-  Split-conformal calibration (Romano et al., conformalized quantile
-  regression). A quantile model's own interval is a claim; this measures how
-  often that claim held on data the model had not seen, and returns the padding
-  needed to make it true.
-
-  For each calibration origin the model is refit on everything before it and
-  scored on the block that follows. The conformity score for one step is how far
-  outside the interval the actual value fell -- negative when it fell inside.
-  The padding is the TARGET_COVERAGE percentile of those scores.
+  Split-conformal calibration. A quantile model's own interval is a claim; this
+  measures how often that claim held on data it had not seen, and returns the
+  padding that makes it true. Scored on the SAME adjusted forecasts that will be
+  returned, so the padding matches what it is padding.
   """
   scores = []
   for k in range(1, origins + 1):
@@ -583,16 +673,15 @@ def _conformal_width(model, data, target, upto, horizon, params, origins):
     if cut < horizon * 3:
       break
     try:
-      _, quant = _raw_forecast(model, data, target, cut, horizon, params)
+      _, quant = _adjusted_forecast(model, data, target, cut, horizon, params)
     except Exception:
       continue
     actual = data.target(target).to_numpy()[cut:cut + horizon].astype(float)
-    lo, hi = quant[:, 0], quant[:, 2]
-    scores.extend(np.maximum(lo - actual, actual - hi))
+    scores.extend(np.maximum(quant[:, 0] - actual, actual - quant[:, 2]))
   if not scores:
     return 0.0
-  # Never tighten: this corrects overconfidence, and a model whose interval is
-  # already honest should be left alone.
+  # Never tighten: this corrects overconfidence, and an honest interval should
+  # be left alone.
   return float(max(0.0, np.quantile(scores, S.TARGET_COVERAGE)))
 
 
@@ -602,30 +691,16 @@ _CONFORMAL_CACHE = {}
 def forecast(model, data, target, upto, horizon, params=None, calibrate=None):
   """Single entry point. model is 'timesfm' or 'gbm'.
 
-  With calibration on, the p10/p90 bounds are widened by an amount measured on
-  held-out data, so the stated 80% interval covers about 80% in practice.
+  Applies the inflation adjustment, then widens the interval by an amount
+  measured on held-out data so the stated coverage is the real coverage.
   """
-  window = getattr(params, "rescale", None)
-  window = S.RESCALE_WINDOW if window is None else window
-  if window:
-    # Forecast the inflation-adjusted series, then put the scale back. The
-    # scale is assumed to hold over the horizon, which is fair for a month.
-    scale = trailing_scale(data.target(target).to_numpy(), window)
-    scaled = _rescaled(data, scale)
-    here = float(scale[upto - 1])
-    point, quant = _raw_forecast(model, scaled, target, upto, horizon, params)
-    point, quant = point * here, quant * here
-  else:
-    point, quant = _raw_forecast(model, data, target, upto, horizon, params)
+  point, quant = _adjusted_forecast(model, data, target, upto, horizon, params)
   if calibrate is None:
     calibrate = S.CALIBRATE_INTERVALS
   if not calibrate:
     return point, quant
 
-  # The level is part of the key, so changing TARGET_COVERAGE takes effect
-  # instead of reusing padding computed for a different level.
-  key = (model, target, upto, horizon, id(data), repr(params),
-         S.TARGET_COVERAGE, window)
+  key = (model, target, upto, horizon, id(data), repr(params), S.TARGET_COVERAGE)
   if key not in _CONFORMAL_CACHE:
     _CONFORMAL_CACHE[key] = _conformal_width(
         model, data, target, upto, horizon, params, S.CALIBRATION_ORIGINS)

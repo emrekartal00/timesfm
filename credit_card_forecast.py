@@ -64,6 +64,9 @@ mdl.add_argument("--device", default=S.TIMESFM_DEVICE, help="cuda / mps / cpu")
 mdl.add_argument("--offline", action="store_true", default=S.TIMESFM_OFFLINE,
                  help="never contact HuggingFace. Only needed when the weights "
                       "come from the cache rather than a local folder")
+mdl.add_argument("--deflator", default=None, metavar="FILE",
+                 help="price index file (date + index columns) to divide out "
+                      "inflation with. Overrides DEFLATOR_FILE in settings.py")
 mdl.add_argument("--rescale", type=int, default=None, metavar="DAYS",
                  help="adjust for inflation: divide each day by how large a "
                       "typical day was at the time, measured over DAYS. Try 90. "
@@ -89,11 +92,11 @@ MODELS = ["timesfm", "gbm"] if args.model == "both" else [args.model]
 tf_params = L.TimesFMParams(
     strategy=args.strategy, covariates=not args.no_covariates, znorm=args.znorm,
     context=args.context, device=args.device, offline=args.offline,
-    rescale=args.rescale,
+    rescale=args.rescale, deflator=args.deflator,
     **({"checkpoint": args.checkpoint} if args.checkpoint else {}))
 gbm_params = L.GBMParams(num_leaves=args.num_leaves,
                          learning_rate=args.learning_rate, rounds=args.rounds,
-                         rescale=args.rescale)
+                         rescale=args.rescale, deflator=args.deflator)
 PARAMS = {"timesfm": tf_params, "gbm": gbm_params}
 
 
