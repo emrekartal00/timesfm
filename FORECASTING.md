@@ -489,9 +489,26 @@ The median is used rather than the mean, so settlement spikes do not inflate the
 scale, and it is shifted one day so a value never helps set its own scale.
 
 **Better, if you have the figures: use a real price index.** `--deflator
-tufe.csv`, or `DEFLATOR_FILE` in `settings.py`. The file needs two columns, a
-date and an index value, at any frequency — monthly TÜFE works as-is, and so
-does ENAG or any index you trust more, since the file is yours.
+tufe.csv`, or `DEFLATOR_FILE` in `settings.py`.
+
+`tufe.csv` is in the repo, current to 2026-08. To refresh it:
+
+```bash
+python fetch_tufe.py
+```
+
+It combines two sources because neither is enough alone: OECD via FRED gives
+real index values but lags about a year, and TÜİK publishes the official annual
+rate for recent months, which is enough to extend the index forward. It
+cross-checks the two on the months they share and refuses to splice them if the
+rates disagree, rather than writing a plausible-looking file.
+
+TÜİK's API rejects ordinary requests, and a headless browser too, so the script
+drives a real one through Playwright — which is why a window opens. Install it
+once with `pip install playwright && python -m playwright install chromium`.
+
+Any file with a date column and an index column works, so ENAG or a
+sector-specific index can be dropped in instead — the file is yours.
 
 ```
 date,index
