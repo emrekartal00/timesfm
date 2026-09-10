@@ -639,7 +639,19 @@ def _adjusted_forecast(model, data, target, upto, horizon, params):
   """
   deflator = getattr(params, "deflator", None) or S.DEFLATOR_FILE
   if deflator:
-    infl, _, _ = load_deflator(deflator, data.index, horizon, data.grid_mode)
+    infl, rate, last_known = load_deflator(deflator, data.index, horizon,
+                                           data.grid_mode)
+    # A price index that stops well before the data means the most recent
+    # history is being deflated by an extrapolation rather than by figures.
+    # That still works, but it is a guess and should not be a silent one.
+    gap = (data.index[-1] - pd.Timestamp(last_known)).days
+    if gap > 45 and deflator not in _DEFLATOR_WARNED:
+      _DEFLATOR_WARNED.add(deflator)
+      print(f"  NOTE: the price index ends {pd.Timestamp(last_known):%Y-%m}, "
+            f"{gap // 30} months before your data does.")
+      print(f"  Those months are filled in at {rate * 100:.2f}% per month, the "
+            f"average of the index's final year.")
+      print(f"  Append the missing months to {deflator} for real figures.")
     hist = infl.iloc[:len(data.index)].to_numpy()
     ahead = infl.iloc[len(data.index):].to_numpy()
     point, quant = _raw_forecast(model, _rescaled(data, hist), target,
@@ -686,6 +698,7 @@ def _conformal_width(model, data, target, upto, horizon, params, origins):
 
 
 _CONFORMAL_CACHE = {}
+_DEFLATOR_WARNED = set()
 
 
 def forecast(model, data, target, upto, horizon, params=None, calibrate=None):
