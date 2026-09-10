@@ -375,7 +375,7 @@ To change what is swept, edit `TIMESFM_GRID` and `GBM_GRID` at the top of
 
 | metric | in plain terms | why this one |
 |---|---|---|
-| **MAE** | "on a typical day we are off by this many lira" | RMSE squares errors, so 45,000-lira payment days would drown out everything else. MAPE and sMAPE explode near zero, and this series sits near zero at weekends and goes negative on payments — sMAPE rated the *worst* model best when tested. |
+| **MAE** | "on a typical day we are off by this many lira" (shown with the unit from `CURRENCY_UNIT`) | RMSE squares errors, so 45,000-lira payment days would drown out everything else. MAPE and sMAPE explode near zero, and this series sits near zero at weekends and goes negative on payments — sMAPE rated the *worst* model best when tested. |
 | **pinball** | "how good are all three numbers together, not just the middle one" | MAE grades only the middle number, so a model with a useless range can win on it. **Trust this one** on a spiky series. |
 | **coverage** | "when it claims 80%, is it really 80%?" | The honesty check. It is what caught a model claiming 80% and delivering 52%. |
 | **MAE spike** | error on payment days only | These are large and rare; averaged in, they hide everything else. |
@@ -448,8 +448,16 @@ On synthetic data shaped like a card statement, over rolling origins:
 | Multichannel beats modelling the signed series | MAE 2,940 → 2,428, payment-day 45,616 → 36,435 |
 | Seasonal naive is a floor, not a rival | 3,339 |
 
-**Use GBM for the number, TimesFM for the range** — or run both, which is the
-default.
+**TimesFM is switched off.** On the real data it came out at roughly twice the
+error of the gradient-boosted model — MAE near 1,000,000,000 against
+615,543,454 — so `DEFAULT_MODEL = "gbm"` and nothing calls it. The code stays,
+and `--model timesfm` still works if that finding is worth re-checking, but the
+1.3 GB of model weights are not needed for normal use.
+
+`settings.py` holds the configuration that won the sweep on real data:
+`GBM_NUM_LEAVES = 63`, `GBM_LEARNING_RATE = 0.05`, `GBM_ROUNDS = 1200`,
+`GBM_MIN_DATA_IN_LEAF = 40`, `RESCALE_WINDOW = 0`. Re-sweep if the data
+changes shape; a smaller sheet usually wants smaller trees.
 
 Two caveats that matter more than the table. This is **synthetic data whose
 structure I designed**, which flatters GBM: real card data is messier, so run

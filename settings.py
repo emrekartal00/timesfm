@@ -31,6 +31,12 @@ without editing anything. The command-line flag is named in each comment.
 # Any of these can still be overridden for a single run: --sheet, --date-col,
 # --balance-col, --currency-col, --growth-col.
 
+CURRENCY_UNIT = "TRY"
+# The unit your numbers are in, printed next to them so a figure is never
+# ambiguous. Quotes required. Use "" for no unit.
+# If a deflator is in use the scripts say "TRY, today's money" instead, since
+# that is what the numbers then mean.
+
 SHEET = 1
 # Which sheet to read, counting from 0. The first sheet is 0, the second is 1.
 # You can also give a name instead, in quotes: SHEET = "Sayfa2"
@@ -148,15 +154,16 @@ PAYMENT_DAYS_OF_MONTH = (4, 14, 24)
 #     python sweep.py --excel yourfile.xlsx --only gbm --origins 6
 # It tries many combinations and ranks them. Then copy the winner in here.
 
-GBM_NUM_LEAVES = 31
+GBM_NUM_LEAVES = 63
 # How complicated each tree is allowed to be. THE MOST IMPORTANT SETTING HERE.
 # Higher = the model can learn finer patterns, and is likelier to memorise.
 # Lower = smoother, safer, may miss real detail.
 # Sensible range: 7 to 63. Try 15 if you have less than a year of data.
-# In testing, 15 beat the default 31 (error 1,055 against 1,117).
-# Command line: --num-leaves 15
+# 63 is set because it won the sweep on the real data. On a smaller sheet a
+# smaller number usually wins instead, so re-sweep if the data changes.
+# Command line: --num-leaves 31
 
-GBM_LEARNING_RATE = 0.05
+GBM_LEARNING_RATE = 0.05   # 0.05 won the sweep
 # How big a correction each tree is allowed to make. Think of it as caution.
 # Lower = more careful and usually more accurate, but you must raise
 # GBM_ROUNDS to compensate, so it takes longer.
@@ -164,19 +171,21 @@ GBM_LEARNING_RATE = 0.05
 # Example: GBM_LEARNING_RATE = 0.025 together with GBM_ROUNDS = 600
 # Command line: --learning-rate 0.025
 
-GBM_ROUNDS = 300
+GBM_ROUNDS = 1200
 # How many trees to build. More is not automatically better: past a point the
 # extra trees only memorise. This works together with GBM_LEARNING_RATE --
 # a low rate needs many rounds, a high rate needs few.
-# Sensible range: 100 to 1000.
-# Command line: --rounds 600
+# Sensible range: 100 to 2000. Set to 1200 from the sweep: 1200 gave the best
+# MAE (615,543,454) and 2000 the best pinball (226,047,246), close enough that
+# the faster one wins.
+# Command line: --rounds 2000
 
-GBM_MIN_DATA_IN_LEAF = 20
+GBM_MIN_DATA_IN_LEAF = 40
 # The fewest days that must support any conclusion the model draws. This is
 # your main protection against memorising.
-# Raise it (say to 40) if the model is overfitting. Lower it (say to 10) if you
-# have very little data and the model seems to be learning nothing.
-# Sensible range: 5 to 50.
+# Raise it if the model is overfitting. Lower it (say to 10) if you have very
+# little data and the model seems to be learning nothing.
+# Sensible range: 5 to 50. Set to 40 from the sweep.
 
 GBM_FEATURE_FRACTION = 0.9
 # What share of the available facts each tree is allowed to look at. Using
@@ -226,6 +235,8 @@ SKIP_FIRST_STEPS = 1
 # year is then compared against a number that was never real.
 
 RESCALE_WINDOW = 0
+# Left off because the sweep chose it: rescale=0 beat 90 and 180 on the real
+# data. Use DEFLATOR_FILE below instead, which is the better instrument anyway.
 # Adjust for inflation, or any other drift in the size of the numbers.
 #
 # WHY. A series running from 2019 to today is not really one series. Turkish
@@ -317,9 +328,14 @@ GBM_WINDOWS = (7, 14, 28)
 # type on the command line still wins over what is written here.
 
 DEFAULT_MODEL = "gbm"
-# Which model to use by default: "gbm", "timesfm", or "both" to run them side
-# by side. Quotes required.
-# Command line: --model both
+# Which model to use. "gbm" is the gradient-boosted model and is what everything
+# is set up for.
+#
+# TimesFM is switched off deliberately. On real data it came out at roughly
+# twice the error of the gradient-boosted model -- MAE around 1,000,000,000
+# against 615,543,454 -- so it is not worth the run time or the 1.3 GB of model
+# weights. The code is still there and "timesfm" or "both" still work if you
+# ever want to check that finding again, but nothing calls it by default.
 
 DEFAULT_TARGET = "purchases"
 # WHAT to forecast. Quotes required.

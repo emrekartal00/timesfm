@@ -62,6 +62,17 @@ if args.skip_first is not None:
   S.SKIP_FIRST_STEPS = args.skip_first
 
 
+# Units are printed beside every figure that has one, so a number is never
+# ambiguous about what it counts. Ratios and strengths are deliberately unitless
+# and say so.
+UNIT = S.CURRENCY_UNIT
+
+
+def money(value, width=16):
+  """A currency figure with its unit attached."""
+  return f"{value:>{width},.0f} {UNIT}" if UNIT else f"{value:>{width},.0f}"
+
+
 def rule(title):
   print(f"\n{'=' * 74}\n{title}\n{'=' * 74}")
 
@@ -111,12 +122,12 @@ elif RESCALED:
   print("  Values below are multiples of a typical day at the time, not lira.")
 print(f"\n{len(y):,} steps, {idx[0]:%Y-%m-%d} to {idx[-1]:%Y-%m-%d} "
       f"({(idx[-1] - idx[0]).days / 365.25:.1f} years)")
-print(f"\n{'mean':>14}{y.mean():>18,.0f}")
-print(f"{'median':>14}{y.median():>18,.0f}")
-print(f"{'std dev':>14}{y.std():>18,.0f}")
-print(f"{'min':>14}{y.min():>18,.0f}   on {y.idxmin():%Y-%m-%d}")
-print(f"{'max':>14}{y.max():>18,.0f}   on {y.idxmax():%Y-%m-%d}")
-print(f"{'negative days':>14}{(y < 0).sum():>18,}   ({(y < 0).mean():.0%} of steps)")
+print(f"\n{'mean':>14}  {money(y.mean())}")
+print(f"{'median':>14}  {money(y.median())}")
+print(f"{'std dev':>14}  {money(y.std())}")
+print(f"{'min':>14}  {money(y.min())}   on {y.idxmin():%Y-%m-%d}")
+print(f"{'max':>14}  {money(y.max())}   on {y.idxmax():%Y-%m-%d}")
+print(f"{'negative days':>14}{(y < 0).sum():>18,} days   ({(y < 0).mean():.0%} of steps)")
 
 # The median is far more useful than the mean here: settlement days are huge and
 # rare, and they drag a mean around without describing a typical day.
@@ -128,8 +139,9 @@ if abs(y.mean()) > 3 * abs(y.median()) and y.median() != 0:
 # -------------------------------------------------------------------- trend --
 rule("2. TREND — is the level drifting?")
 yearly = y.groupby(idx.year).agg(["median", "mean", "count"])
-print(f"{'year':<8}{'typical day':>16}{'mean day':>16}{'days':>8}{'vs first year':>16}")
-print("-" * 64)
+print(f"{'year':<8}{'typical day (' + UNIT + ')':>22}{'mean day (' + UNIT + ')':>22}"
+      f"{'days':>7}{'vs base yr':>12}")
+print("-" * 63)
 # Compare against the first year that has enough days to mean anything. A
 # part-year at the start would otherwise become the yardstick for everything.
 full = yearly[yearly["count"] >= 60]
@@ -141,8 +153,8 @@ if not np.isfinite(first) or first == 0:
         f"whole-series median instead)")
 for year, row in yearly.iterrows():
   ratio = row["median"] / first if first else float("nan")
-  print(f"{year:<8}{row['median']:>16,.0f}{row['mean']:>16,.0f}"
-        f"{int(row['count']):>8}{ratio:>15.2f}x")
+  print(f"{year:<8}{row['median']:>22,.0f}{row['mean']:>22,.0f}"
+        f"{int(row['count']):>7}{ratio:>11.2f}x")
 
 drift = yearly["median"].iloc[-1] / first if first else float("nan")
 print(f"\nA typical day is {drift:.1f}x its {base} size.")
@@ -158,7 +170,7 @@ roll = y.rolling(90, min_periods=30).median()
 print(f"\n90-day typical day, sampled through the history:")
 for when in pd.date_range(idx[0], idx[-1], periods=min(8, len(y) // 90 or 2)):
   nearest = roll.index[roll.index.get_indexer([when], method="nearest")[0]]
-  print(f"  {nearest:%Y-%m}  {roll.loc[nearest]:>16,.0f}")
+  print(f"  {nearest:%Y-%m}  {money(roll.loc[nearest])}")
 
 try:
   from statsmodels.tsa.stattools import adfuller
@@ -221,13 +233,13 @@ except Exception as exc:
 rule("4. WEEKLY CYCLE — which days are busy?")
 overall = y.median()
 wk = y.groupby(idx.dayofweek).agg(["median", "mean", "count"])
-print(f"{'day':<6}{'typical':>16}{'index':>8}{'days':>8}   relative size")
-print("-" * 70)
+print(f"{'day':<6}{'typical (' + UNIT + ')':>22}{'index':>8}{'days':>7}   relative size")
+print("-" * 74)
 for d, row in wk.iterrows():
   ratio = row["median"] / overall if overall else float("nan")
-  print(f"{DAYS[d]:<6}{row['median']:>16,.0f}{ratio:>8.2f}{int(row['count']):>8}   "
+  print(f"{DAYS[d]:<6}{row['median']:>22,.0f}{ratio:>8.2f}{int(row['count']):>7}   "
         f"{bar(row['median'], overall)}")
-print("\nIndex 1.00 is an average day. 1.40 means 40% busier than typical.")
+print("\n'index' has no unit: 1.00 is an average day, 1.40 means 40% busier.")
 
 
 # ----------------------------------------------------------------- monthly --
@@ -238,11 +250,11 @@ top = dm.sort_values("median", ascending=False).head(6)
 low = dm.sort_values("median").head(6)
 print("Busiest days of the month:")
 for d, row in top.iterrows():
-  print(f"  day {d:>2}   {row['median']:>16,.0f}   index {row['index']:>5.2f}")
+  print(f"  day {d:>2}   {money(row['median'])}   index {row['index']:>5.2f}")
 print("\nWeakest days of the month (settlements land here):")
 for d, row in low.iterrows():
   flag = "  <- a configured payment day" if d in S.PAYMENT_DAYS_OF_MONTH else ""
-  print(f"  day {d:>2}   {row['median']:>16,.0f}   index {row['index']:>5.2f}{flag}")
+  print(f"  day {d:>2}   {money(row['median'])}   index {row['index']:>5.2f}{flag}")
 
 if (data.payments > 0).any():
   by_dom = pd.Series(data.payments.to_numpy(), index=idx).groupby(idx.day)
@@ -260,12 +272,12 @@ if (data.payments > 0).any():
 rule("6. YEARLY CYCLE — which months are busy?")
 if idx[-1].year - idx[0].year >= 1:
   mo = y.groupby(idx.month).agg(["median", "count"])
-  print(f"{'month':<7}{'typical':>16}{'index':>8}{'years seen':>12}   relative size")
-  print("-" * 74)
+  print(f"{'month':<7}{'typical (' + UNIT + ')':>22}{'index':>8}{'years':>8}   relative size")
+  print("-" * 76)
   for m, row in mo.iterrows():
     ratio = row["median"] / overall if overall else float("nan")
     n_years = row["count"] / 30.4
-    print(f"{MONTHS[m-1]:<7}{row['median']:>16,.0f}{ratio:>8.2f}{n_years:>12.1f}   "
+    print(f"{MONTHS[m-1]:<7}{row['median']:>22,.0f}{ratio:>8.2f}{n_years:>8.1f}   "
           f"{bar(row['median'], overall)}")
   if idx[-1].year - idx[0].year < 3:
     print("\n  With only a couple of years, a monthly pattern is hard to separate")
@@ -296,59 +308,76 @@ if hmap:
   # A holiday matters if its days differ from ordinary days by enough to notice
   # AND often enough that it is not one odd year. Tested per holiday, because
   # Kurban Bayramı and Republic Day are not the same kind of event.
+  # Every holiday is listed, including the ones with only a handful of
+  # observations. A holiday that cannot be judged is worth seeing as such,
+  # rather than being silently left out of the table.
   rows = []
   for name in sorted(set(in_range.values())):
     days = {d for d, n in in_range.items() if n == name}
     on = y[[d in days for d in as_date]]
     eve = y[[(d + pd.Timedelta(days=1)).date() in days for d in idx]]
-    if len(on) < 3:
-      continue
+    after = y[[(d - pd.Timedelta(days=1)).date() in days for d in idx]]
     p_on = np.nan
     if have_test and len(on) >= 5 and len(ordinary) >= 5:
       try:
         p_on = float(mannwhitneyu(on, ordinary, alternative="two-sided")[1])
       except Exception:
         p_on = np.nan
-    rows.append({
-        "name": name, "days": len(on),
-        "on": on.median() / base_med if base_med else np.nan,
-        "eve": eve.median() / base_med if (base_med and len(eve)) else np.nan,
-        "p": p_on})
+    ratio = (lambda v: v.median() / base_med if (base_med and len(v)) else np.nan)
+    rows.append({"name": name, "days": len(on), "dates": sorted(days),
+                 "on_med": on.median() if len(on) else np.nan,
+                 "on": ratio(on), "eve": ratio(eve), "after": ratio(after),
+                 "p": p_on})
 
   rows.sort(key=lambda r: -abs((r["on"] if np.isfinite(r["on"]) else 1) - 1))
-  print(f"{'holiday':<44}{'days':>6}{'on day':>9}{'eve':>8}{'real?':>8}")
-  print("-" * 76)
+  print(f"An ordinary day is {money(base_med, 0)}. Every figure below is a")
+  print("multiple of that: 2.00x means double, 0.50x means half.\n")
+  print(f"{'holiday':<40}{'days':>5}{'eve':>9}{'on day':>9}{'after':>9}{'real?':>9}")
+  print("-" * 81)
   for r in rows:
     if np.isfinite(r["p"]):
-      verdict = "yes" if r["p"] < 0.05 else "unclear"
+      verdict = "yes" if r["p"] < 0.05 else "no"
     else:
       verdict = "too few"
-    # A negative multiple means the median day there was a settlement, not
-    # spending: the holiday or its eve collides with a payment date. That is a
-    # calendar coincidence, not a holiday effect.
-    clash = (np.isfinite(r["on"]) and r["on"] < 0) or (np.isfinite(r["eve"]) and r["eve"] < 0)
-    print(f"{r['name'][:43]:<44}{r['days']:>6}{r['on']:>8.2f}x"
-          f"{r['eve']:>7.2f}x{verdict:>8}" + ("  *" if clash else ""))
-  if any((np.isfinite(r["on"]) and r["on"] < 0) or
-         (np.isfinite(r["eve"]) and r["eve"] < 0) for r in rows):
-    print("\n  * a negative multiple means that day usually carries a")
-    print("    settlement, so it collides with a payment date. That is a")
-    print("    calendar coincidence, not the holiday moving spending.")
+    clash = any(np.isfinite(r[k]) and r[k] < 0 for k in ("on", "eve", "after"))
+    fmt = lambda v: f"{v:>8.2f}x" if np.isfinite(v) else f"{'-':>9}"
+    print(f"{r['name'][:39]:<40}{r['days']:>5}{fmt(r['eve'])}{fmt(r['on'])}"
+          f"{fmt(r['after'])}{verdict:>9}" + ("  *" if clash else ""))
 
-  print("\n'on day' and 'eve' are multiples of an ordinary day: 2.00x means")
-  print("double. 'real?' is whether that difference is big and consistent")
-  print("enough to be more than chance, not just a one-off year.")
+  if any(any(np.isfinite(r[k]) and r[k] < 0 for k in ("on", "eve", "after"))
+         for r in rows):
+    print("\n  * a negative multiple means that day usually carries a settlement,")
+    print("    so it collides with a payment date. A calendar coincidence, not")
+    print("    the holiday moving spending.")
+
+  print("\n'real?' asks whether the difference is big and consistent enough to")
+  print("be more than chance. 'too few' means too few observations to tell,")
+  print("which is normal for a holiday that falls on one day a year.")
+
   movers = [r for r in rows if np.isfinite(r["p"]) and r["p"] < 0.05]
   if movers:
-    print(f"\n{len(movers)} holiday(s) genuinely move card usage:")
+    print(f"\n{len(movers)} holiday(s) genuinely move card usage:\n")
     for r in movers:
       direction = "raises" if r["on"] > 1 else "lowers"
-      print(f"  {r['name'][:50]:<52}{direction} it to {r['on']:.2f}x")
-    print("\nThese are already covered: USE_HOLIDAYS feeds the holiday, its eve,")
-    print("the day after and bridge days to the model as covariates.")
+      print(f"  {r['name'][:44]:<46}{direction} it to {r['on']:.2f}x "
+            f"({money(r['on_med'], 0)})")
+      years = sorted({d.year for d in r["dates"]})
+      print(f"{'':<46}seen in {len(r['dates'])} day(s) across "
+            f"{len(years)} year(s): {years[0]}-{years[-1]}")
   else:
     print("\nNo single holiday clears the bar on its own. With a handful of")
     print("observations each that is common, and the covariate can still help.")
+
+  print("\nEvery holiday date in range, with the value on the day:\n")
+  for name in sorted(set(in_range.values())):
+    days = sorted(d for d, n in in_range.items() if n == name)
+    print(f"  {name}")
+    for d in days:
+      stamp = pd.Timestamp(d)
+      if stamp in y.index:
+        print(f"      {stamp:%Y-%m-%d} {DAYS[stamp.dayofweek]}  "
+              f"{money(y.loc[stamp], 16)}"
+              f"   {y.loc[stamp] / base_med:>6.2f}x" if base_med else "")
 else:
   print(f"No holidays found for {S.HOLIDAY_COUNTRY!r}.")
   print("If that is wrong, `pip install holidays` -- the covariate is doing nothing.")
@@ -382,12 +411,12 @@ spread = y.quantile(0.75) - y.quantile(0.25)
 fence = 3 * spread
 big = y[(y - y.median()).abs() > fence]
 print(f"\n{len(big):,} unusually large days ({len(big) / len(y):.1%} of the series),")
-print(f"meaning more than {fence:,.0f} away from a typical day.")
+print(f"meaning more than {money(fence, 0)} away from a typical day.")
 if len(big):
   print("\nThe largest, with dates:")
   for when, val in big.reindex(big.abs().sort_values(ascending=False).index).head(8).items():
-    print(f"  {when:%Y-%m-%d} {DAYS[when.dayofweek]}  {val:>18,.0f}"
-          f"  (day {when.day} of the month)")
+    print(f"  {when:%Y-%m-%d} {DAYS[when.dayofweek]}  {money(val, 18)}"
+          f"   (day {when.day} of the month)")
 
 
 # ------------------------------------------------------------------ outputs --

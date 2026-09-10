@@ -21,6 +21,12 @@ import cc_lib as L
 import settings as S
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+UNIT = S.CURRENCY_UNIT
+
+
+def money(value, width=16):
+  """A currency figure with its unit attached, so no number is ambiguous."""
+  return f"{value:>{width},.0f} {UNIT}" if UNIT else f"{value:>{width},.0f}"
 
 ap = argparse.ArgumentParser(description=__doc__,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -114,13 +120,13 @@ for note in data.notes:
   print(f"  {note}")
 print(f"\ngrid: {data.grid_mode} -> {len(data.index):,} steps "
       f"({data.index[0]:%Y-%m-%d} to {data.index[-1]:%Y-%m-%d})")
-print(f"  mean change per step : {data.net_change.mean():,.2f}")
-print(f"  mean daily purchases : {data.purchases.mean():,.2f}")
-print(f"  steps with a payment : {(data.payments > 0).sum():,} "
-      f"(largest {data.payments.max():,.2f})")
+print(f"  mean change per step : {money(data.net_change.mean())}")
+print(f"  mean daily purchases : {money(data.purchases.mean())}")
+print(f"  steps with a payment : {(data.payments > 0).sum():>13,} steps "
+      f"(largest {money(data.payments.max(), 0)})")
 
 series = data.target(args.target)
-print(f"\ntarget: {args.target}")
+print(f"\ntarget: {args.target}" + (f"   unit: {UNIT}" if UNIT else ""))
 
 
 # -------------------------------------------------------------- seasonality --
@@ -165,12 +171,14 @@ except Exception as exc:
 # ---------------------------------------------------------------- backtests --
 def show(df_scores, label):
   print(f"\n{label}")
-  print(f"{'model':<16}{'MAE':>12}{'pinball':>10}{'80% cov':>9}"
-        f"{'MAE spike':>12}{'MAE other':>12}")
-  print("-" * 71)
+  head = f" ({UNIT})" if UNIT else ""
+  print(f"{'model':<16}{'MAE' + head:>18}{'pinball' + head:>18}{'80% cov':>9}"
+        f"{'MAE spike' + head:>18}{'MAE other' + head:>18}")
+  print("-" * 83)
   for name, row in df_scores.items():
-    print(f"{name:<16}{row['mae']:>12,.0f}{row['pinball']:>10,.0f}"
-          f"{row['coverage']:>8.0%}{row['mae_spike']:>12,.0f}{row['mae_other']:>12,.0f}")
+    print(f"{name:<16}{row['mae']:>18,.0f}{row['pinball']:>18,.0f}"
+          f"{row['coverage']:>8.0%}{row['mae_spike']:>18,.0f}"
+          f"{row['mae_other']:>18,.0f}")
 
 
 if not args.no_backtest and len(series) > args.horizon * 3:
@@ -239,9 +247,10 @@ if len(result) > 14:
 
 unit = "business days" if data.grid_mode == "business" else "days"
 print(f"\nTotal over {args.horizon} {unit} "
-      f"({future[0]:%Y-%m-%d} to {future[-1]:%Y-%m-%d}):")
+      f"({future[0]:%Y-%m-%d} to {future[-1]:%Y-%m-%d})"
+      + (f", in {UNIT}:" if UNIT else ":"))
 for c in fcols:
-  print(f"  {c:<22}{result[c].sum():>16,.0f}")
+  print(f"  {c:<22}{money(result[c].sum())}")
 print("\nBy week:")
 print(result.set_index("date")[fcols].resample("W").sum().to_string(
     formatters={c: "{:,.0f}".format for c in fcols}))

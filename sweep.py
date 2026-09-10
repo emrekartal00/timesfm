@@ -72,6 +72,11 @@ if isinstance(args.sheet, str) and args.sheet.strip().lstrip("-").isdigit():
 # ------------------------------------------------------------------- grids ---
 # Each entry becomes one configuration. Keep the quick grids small: every
 # configuration is refit at every origin, so cost is configs x origins.
+# TimesFM is switched off. On the real data it came out at roughly twice the
+# error of the gradient-boosted model -- MAE near 1,000,000,000 against
+# 615,543,454 -- so sweeping it burns time for a foregone conclusion. The grid
+# is kept, and --only timesfm still uses it, if that finding is ever worth
+# re-checking.
 TIMESFM_GRID = {
     "quick": dict(strategy=["auto", "raw"], covariates=[True, False],
                   znorm=[False], context=[None], rescale=[0, 90]),
@@ -151,7 +156,7 @@ for i, (model, cfg, params) in enumerate(jobs, 1):
                  "pinball": m.pinball, "coverage": m.coverage,
                  "mae_spike": m.mae_spike, "mae_other": m.mae_other,
                  "seconds": time.time() - t0, **cfg})
-    print(f"MAE {m.mae:>9,.0f}  pin {m.pinball:>7,.0f}  "
+    print(f"MAE {m.mae:>15,.0f}  pin {m.pinball:>13,.0f}  "
           f"cov {m.coverage:>4.0%}  {time.time() - t0:>5.1f}s")
   except Exception as exc:
     print(f"failed: {type(exc).__name__}: {exc}")
@@ -179,8 +184,8 @@ for model in df.model.unique():
   for metric in ("mae", "pinball"):
     best = sub.loc[sub[metric].idxmin()]
     print(f"{model:<9} best {metric:<8} {best.config}")
-    print(f"{'':>9}      MAE {best.mae:,.0f}  pinball {best.pinball:,.0f}  "
-          f"coverage {best.coverage:.0%}")
+    print(f"{'':>9}      MAE {best.mae:,.0f}{unit}  "
+          f"pinball {best.pinball:,.0f}{unit}  coverage {best.coverage:.0%}")
 
 if len(df.model.unique()) > 1:
   print("\nA fair comparison uses each model's own best configuration, not its")
