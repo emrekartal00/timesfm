@@ -469,7 +469,25 @@ in point accuracy and is the single largest coverage fix available.
 holidays it found. If it says NONE, `pip install holidays` — that was worth 42%
 in testing.
 
-**3. Adjust for drift, if a shorter context beat using everything.** That
+**3. Adjust for drift, if a shorter context beat using everything.**
+`--rescale 90` on either script, or `RESCALE_WINDOW = 90` in `settings.py`.
+
+How it works, on one day of real data:
+
+```
+2019-06-04   actual 340,644,948   typical day then  62,609,090   ->  5.44
+2026-06-02   actual 919,474,107   typical day then 660,387,407   ->  1.39
+```
+
+Each day is divided by how large a typical day was **at that time**, measured
+over the trailing 90 days. A quiet 2026 day is a much bigger number than a busy
+2019 day, and in lira the model cannot tell those apart; in "multiples of a
+typical day" it can. The forecast is made on the levelled series and then
+multiplied back by today's scale, so the answer comes out in lira.
+
+The median is used rather than the mean, so settlement spikes do not inflate the
+scale, and it is shifted one day so a value never helps set its own scale.
+ That
 pattern means the old data is hurting: a normal day years ago is not a normal
 day now. `RESCALE_WINDOW = 90` divides every day by how big a typical day was at
 that time, forecasts the levelled series, then restores today's scale — no
