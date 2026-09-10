@@ -107,6 +107,13 @@ Days of the month where a settlement usually happens:
 settings.py has PAYMENT_DAYS_OF_MONTH = [4, 14, 24]
 ```
 
+`--deflator tufe.csv` reports everything in today's lira instead of the lira of
+the day, which changes what the trend section is telling you. On a test series
+the nominal figures showed a typical day growing to 8.5x its 2019 size; deflated
+by the real index it came out at 0.9x — the same data describing growth or a
+real-terms decline depending only on whether inflation was removed. `--rescale`
+does a cruder version of this without needing an index file.
+
 `--plot` writes `explore.png`; `--out parts.csv` saves the decomposed cycles.
 
 ## 4. What the script does to your data

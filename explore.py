@@ -42,6 +42,11 @@ ap.add_argument("--grid", default=S.DEFAULT_GRID,
                 choices=["auto", "business", "calendar"])
 ap.add_argument("--target", default="growth",
                 choices=["purchases", "net_change", "growth", "balance"])
+ap.add_argument("--deflator", default=None, metavar="FILE",
+                help="price index file (date + index columns) to divide out "
+                     "inflation with, so every year is in today's money. This "
+                     "is the better option when you have the figures; see "
+                     "fetch_tufe.py. Overrides DEFLATOR_FILE in settings.py")
 ap.add_argument("--rescale", type=int, default=None, metavar="DAYS",
                 help="adjust for inflation before analysing: divide each day by "
                      "how large a typical day was at that time, measured over "
@@ -80,8 +85,23 @@ for note in data.notes:
 y = data.target(args.target).astype(float)
 idx = y.index
 
+DEFLATOR = args.deflator or S.DEFLATOR_FILE
 RESCALED = args.rescale if args.rescale is not None else S.RESCALE_WINDOW
-if RESCALED:
+
+if DEFLATOR:
+  # A price index removes price rises and leaves real growth. Everything is
+  # measured against the last date in the history, so the numbers below are in
+  # today's lira and a 2019 day can be compared with a 2026 one directly.
+  infl, rate, last_known = L.load_deflator(DEFLATOR, idx, 0, data.grid_mode)
+  y = pd.Series(y.to_numpy() / infl.reindex(idx).to_numpy(), index=idx)
+  print(f"\n  DEFLATED using {DEFLATOR}. Values below are in today's lira.")
+  gap = (idx[-1] - pd.Timestamp(last_known)).days
+  if gap > 45:
+    print(f"  NOTE: that index ends {pd.Timestamp(last_known):%Y-%m}, "
+          f"{gap // 30} months short of the data; the rest is filled in at "
+          f"{rate * 100:.2f}%/month.")
+  RESCALED = 0                      # a price index supersedes the proxy
+elif RESCALED:
   # Divide each day by how big a typical day was at that time. Everything below
   # is then measured in "typical days of that era" rather than lira, so a 2019
   # Tuesday and a 2026 Tuesday can be compared directly.
