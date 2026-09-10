@@ -387,25 +387,49 @@ else:
 rule("8. MEMORY AND OUTLIERS")
 try:
   from statsmodels.tsa.stattools import acf
-  lags = acf(y.to_numpy(), nlags=min(400, len(y) // 3), fft=True)
+  nlags = min(400, len(y) // 3)
+  lags = acf(y.to_numpy(), nlags=nlags, fft=True)
+
+  # The cycles worth naming, always reported whether or not they are the
+  # largest. Showing only the biggest peaks hides the fundamentals: if the
+  # 21-day repeat is stronger than the 7-day one, a top-N list drops lag 7
+  # entirely and the weekly rhythm looks absent when it is not.
+  NAMED = [(1, "yesterday"), (7, "one week"), (14, "two weeks"),
+           (21, "three weeks"), (28, "four weeks"), (30, "one month"),
+           (60, "two months"), (91, "one quarter"), (182, "half a year"),
+           (365, "one year")]
+  print("The cycles that matter, whether or not they are the strongest:\n")
+  print(f"  {'lag':>5}  {'meaning':<14}{'correlation':>13}   strength")
+  print("  " + "-" * 52)
+  for lag, meaning in NAMED:
+    if lag > nlags:
+      continue
+    v = float(lags[lag])
+    mark = "#" * int(min(20, abs(v) * 40))
+    print(f"  {lag:>5}  {meaning:<14}{v:>+13.3f}   {mark}")
+  print("\n  Correlation has no unit. Above about +0.2 is a real repeat;")
+  print("  near zero means that gap carries no memory.")
+
+  # Separately, whatever the data itself says is strongest.
   peaks = sorted(range(1, len(lags)), key=lambda i: -abs(lags[i]))[:8]
-  print("Strongest repeats (how much a day resembles the day N steps earlier):\n")
-  for p in sorted(peaks):
-    # Longest period first: 365 is also a multiple of 7, and calling it
-    # "52x weekly" rather than "yearly" would be useless. Only small multiples
-    # are labelled, since "19x weekly" says nothing a reader can act on.
+  print("\nStrongest repeats found anywhere, in case the list above misses one:\n")
+  for p_ in sorted(peaks):
     label = ""
     for period, name, tol in ((365, "yearly", 5), (91, "quarterly", 3),
                               (30, "monthly", 2), (7, "weekly", 1)):
-      mult = round(p / period)
-      if mult >= 1 and mult <= 4 and abs(p - mult * period) <= tol:
+      mult = round(p_ / period)
+      if 1 <= mult <= 4 and abs(p_ - mult * period) <= tol:
         label = f"  <- {name}" if mult == 1 else f"  <- {mult}x {name}"
         break
-    print(f"  {p:>4} steps back   {lags[p]:+.3f}{label}")
-  print("\nA repeat at a multiple of 7 is the weekly rhythm, at ~30 the monthly")
-  print("settlement rhythm, at ~365 an annual one.")
+    print(f"  {p_:>5} steps back  {float(lags[p_]):>+13.3f}{label}")
+
+  weekly_family = [p_ for p_ in peaks if p_ % 7 == 0]
+  if len(weekly_family) >= len(peaks) / 2:
+    print(f"\n  {len(weekly_family)} of the {len(peaks)} strongest repeats are exact")
+    print("  multiples of 7, which is a weekly rhythm however the peaks are")
+    print("  labelled -- the biggest one simply is not at 7 itself.")
 except Exception as exc:
-  print(f"(autocorrelation unavailable: {type(exc).__name__})")
+  print(f"(autocorrelation unavailable: {type(exc).__name__}: {exc})")
 
 spread = y.quantile(0.75) - y.quantile(0.25)
 fence = 3 * spread
