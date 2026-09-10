@@ -54,6 +54,11 @@ ap.add_argument("--rescale", type=int, default=None, metavar="DAYS",
 ap.add_argument("--skip-first", type=int, default=None, metavar="N",
                 help="drop N steps from the start (default: settings.py)")
 ap.add_argument("--plot", action="store_true", help="write explore.png")
+ap.add_argument("--html", nargs="?", const="explore.html", default=None,
+                metavar="FILE",
+                help="write a self-contained HTML report with charts "
+                     "(default explore.html). Opens in any browser, needs no "
+                     "internet, and can be emailed as one file")
 ap.add_argument("--out", default=None, help="save the decomposition to a CSV")
 args = ap.parse_args()
 if isinstance(args.sheet, str) and args.sheet.strip().lstrip("-").isdigit():
@@ -71,6 +76,16 @@ UNIT = S.CURRENCY_UNIT
 def money(value, width=16):
   """A currency figure with its unit attached."""
   return f"{value:>{width},.0f} {UNIT}" if UNIT else f"{value:>{width},.0f}"
+
+
+REPORT = None
+if args.html:
+  import matplotlib
+  matplotlib.use("Agg")
+  import matplotlib.pyplot as plt
+  from report import Report, style_axes
+  REPORT = Report("Series analysis",
+                  f"{args.target} from {args.excel}")
 
 
 def rule(title):
@@ -122,6 +137,28 @@ elif RESCALED:
   print("  Values below are multiples of a typical day at the time, not lira.")
 print(f"\n{len(y):,} steps, {idx[0]:%Y-%m-%d} to {idx[-1]:%Y-%m-%d} "
       f"({(idx[-1] - idx[0]).days / 365.25:.1f} years)")
+
+if REPORT:
+  REPORT.h2("The data")
+  REPORT.stats([
+      ("steps", f"{len(y):,}"),
+      ("period", f"{idx[0]:%Y-%m-%d} to {idx[-1]:%Y-%m-%d}"),
+      ("years", f"{(idx[-1] - idx[0]).days / 365.25:.1f}"),
+      ("typical day", f"{y.median():,.0f} {UNIT}"),
+      ("negative days", f"{(y < 0).sum():,} ({(y < 0).mean():.0%})"),
+  ])
+  REPORT.p("Every figure in this report is in " + (UNIT or "the source units")
+           + " unless it is marked as a multiple or an index, which have no unit."
+           + (" Amounts are in today's money, with inflation removed."
+              if DEFLATOR else ""))
+  for note in data.notes:
+    REPORT.note(note)
+  fig, ax = plt.subplots(figsize=(11, 3.2))
+  ax.plot(idx, y.to_numpy(), lw=0.55, color="#1f5f8b")
+  ax.axhline(0, color="#b4451f", lw=0.7, alpha=0.5)
+  style_axes(ax, "The whole series", UNIT)
+  REPORT.figure(fig, "Every step in the history. Downward spikes are "
+                     "settlements; the band above zero is ordinary usage.")
 print(f"\n{'mean':>14}  {money(y.mean())}")
 print(f"{'median':>14}  {money(y.median())}")
 print(f"{'std dev':>14}  {money(y.std())}")
@@ -158,6 +195,26 @@ for year, row in yearly.iterrows():
 
 drift = yearly["median"].iloc[-1] / first if first else float("nan")
 print(f"\nA typical day is {drift:.1f}x its {base} size.")
+
+if REPORT:
+  REPORT.h2("Trend")
+  REPORT.p(f"A typical day is {drift:.2f}x its {base} size."
+           + (" Inflation has been removed, so this is real growth or decline."
+              if DEFLATOR else
+              " This is in cash terms, so part of it is inflation rather than"
+              " more business."))
+  REPORT.table(
+      ["year", f"typical day ({UNIT})", f"mean day ({UNIT})", "days", "vs base"],
+      [[int(yr), f"{r['median']:,.0f}", f"{r['mean']:,.0f}", int(r["count"]),
+        (f"{r['median'] / first:.2f}x" if first else "-")]
+       for yr, r in yearly.iterrows()],
+      numeric={1, 2, 3, 4})
+  fig, ax = plt.subplots(figsize=(11, 3))
+  ax.plot(idx, y.rolling(90, min_periods=30).median(), lw=1.8, color="#b4451f")
+  style_axes(ax, "Typical day, 90-day rolling median", UNIT)
+  REPORT.figure(fig, "The median is used so settlement spikes do not drag the "
+                     "line around. A rising line means the level itself is "
+                     "moving, which makes older data less representative.")
 if RESCALED:
   print("  (already inflation-adjusted, so this should sit near 1.0; if it does")
   print("   not, something other than inflation is moving the level)")
@@ -224,6 +281,32 @@ try:
     print(f"{name:<12}{period:>9}{st:>11.2f}{verdict:>14}")
   print(f"\nWhat is left unexplained (noise): {resid_var / float(np.var(y)):.0%} "
         f"of the total variation.")
+  if REPORT:
+    REPORT.h2("The seasonal cycles")
+    REPORT.p("Strength is the share of the wobble a cycle explains once the "
+             "trend is taken out. It has no unit: 0 means the cycle is absent, "
+             "1 means the series is nothing but that cycle.")
+    REPORT.table(["cycle", "period (steps)", "strength", "reading"],
+                 [[n, p_, f"{strengths[n]:.2f}",
+                   ("strong" if strengths[n] > 0.6 else
+                    "moderate" if strengths[n] > 0.3 else
+                    "weak" if strengths[n] > 0.1 else "negligible")]
+                  for n, p_ in usable if n in strengths],
+                 numeric={1, 2})
+    REPORT.p(f"Noise, the part no cycle explains: "
+             f"{resid_var / float(np.var(y)):.0%} of the variation.")
+    if components:
+      fig, axes = plt.subplots(len(components), 1,
+                               figsize=(11, 2.1 * len(components)), sharex=True)
+      axes = np.atleast_1d(axes)
+      for ax, (name, comp) in zip(axes, components.items()):
+        ax.plot(idx, comp, lw=0.7, color="#1f7a4d")
+        style_axes(ax, f"{name} component  (strength {strengths.get(name, 0):.2f})",
+                   UNIT)
+      fig.tight_layout()
+      REPORT.figure(fig, "Each cycle pulled out separately. A component that "
+                         "looks like flat noise is a cycle that is not really "
+                         "there.")
 except Exception as exc:
   print(f"(MSTL unavailable: {type(exc).__name__}: {exc})")
   print("The profiles below are computed with plain averages and still hold.")
@@ -241,6 +324,25 @@ for d, row in wk.iterrows():
         f"{bar(row['median'], overall)}")
 print("\n'index' has no unit: 1.00 is an average day, 1.40 means 40% busier.")
 
+if REPORT:
+  REPORT.h2("Weekly cycle")
+  REPORT.p("Index has no unit: 1.00 is an average day, 1.40 means 40% busier "
+           "than typical.")
+  REPORT.table(["day", f"typical ({UNIT})", "index", "days seen"],
+               [[DAYS[d], f"{r['median']:,.0f}",
+                 f"{r['median'] / overall:.2f}" if overall else "-",
+                 int(r["count"])] for d, r in wk.iterrows()],
+               numeric={1, 2, 3})
+  fig, ax = plt.subplots(figsize=(8, 3))
+  vals = [wk.loc[d, "median"] if d in wk.index else 0 for d in range(7)]
+  ax.bar(DAYS, vals, color=["#1f5f8b"] * 5 + ["#8a949e"] * 2)
+  if overall:
+    ax.axhline(overall, color="#b4451f", lw=1.1, ls="--", label="average day")
+    ax.legend(fontsize=9, frameon=False)
+  style_axes(ax, "Typical value by weekday", UNIT)
+  REPORT.figure(fig, "Weekend bars are greyed. The dashed line is an average "
+                     "day across the whole history.")
+
 
 # ----------------------------------------------------------------- monthly --
 rule("5. MONTHLY CYCLE — which days of the month matter?")
@@ -256,6 +358,7 @@ for d, row in low.iterrows():
   flag = "  <- a configured payment day" if d in S.PAYMENT_DAYS_OF_MONTH else ""
   print(f"  day {d:>2}   {money(row['median'])}   index {row['index']:>5.2f}{flag}")
 
+share, common = pd.Series(dtype=float), pd.Series(dtype=float)
 if (data.payments > 0).any():
   by_dom = pd.Series(data.payments.to_numpy(), index=idx).groupby(idx.day)
   share = by_dom.apply(lambda g: float((g > 0).mean()))
@@ -264,6 +367,30 @@ if (data.payments > 0).any():
   for d, frac in common.items():
     print(f"  day {d:>2}   {frac:>5.0%} of months")
   print(f"\nsettings.py has PAYMENT_DAYS_OF_MONTH = {list(S.PAYMENT_DAYS_OF_MONTH)}")
+  if REPORT:
+    REPORT.h2("Monthly cycle")
+    REPORT.p("Where in the month the money moves. Settlement days show as "
+             "large negatives.")
+    REPORT.table(["day of month", f"typical ({UNIT})", "index",
+                  "settlement in % of months"],
+                 [[int(d), f"{dm.loc[d, 'median']:,.0f}",
+                   f"{dm.loc[d, 'index']:.2f}",
+                   f"{share.get(d, 0):.0%}"] for d in sorted(dm.index)],
+                 numeric={0, 1, 2, 3})
+    fig, ax = plt.subplots(figsize=(11, 3.2))
+    colours = ["#b4451f" if d in S.PAYMENT_DAYS_OF_MONTH else "#1f5f8b"
+               for d in dm.index]
+    ax.bar(dm.index, dm["median"], color=colours)
+    ax.axhline(0, color="#1a1d21", lw=0.8)
+    style_axes(ax, "Typical value by day of the month", UNIT)
+    REPORT.figure(fig, "Configured payment days are marked in red. If the big "
+                       "negative bars are not red, PAYMENT_DAYS_OF_MONTH in "
+                       "settings.py does not match what the data does.")
+    if common is not None and len(common):
+      REPORT.note("Settlements actually recur on days "
+                  + ", ".join(str(int(d)) for d in sorted(common.index))
+                  + f". settings.py has {list(S.PAYMENT_DAYS_OF_MONTH)}.",
+                  warn=not (set(common.index) & set(S.PAYMENT_DAYS_OF_MONTH)))
   if not set(common.index) & set(S.PAYMENT_DAYS_OF_MONTH):
     print("  WARNING: none of those match what the data shows. Fix the setting.")
 
@@ -282,6 +409,23 @@ if idx[-1].year - idx[0].year >= 1:
   if idx[-1].year - idx[0].year < 3:
     print("\n  With only a couple of years, a monthly pattern is hard to separate")
     print("  from coincidence. Treat these as suggestive, not established.")
+  if REPORT:
+    REPORT.h2("Yearly cycle")
+    REPORT.p("Which months run above or below an average day. Each month needs "
+             "several years before a pattern can be told from coincidence.")
+    REPORT.table(["month", f"typical ({UNIT})", "index", "years seen"],
+                 [[MONTHS[m - 1], f"{r['median']:,.0f}",
+                   f"{r['median'] / overall:.2f}" if overall else "-",
+                   f"{r['count'] / 30.4:.1f}"] for m, r in mo.iterrows()],
+                 numeric={1, 2, 3})
+    fig, ax = plt.subplots(figsize=(9, 3))
+    ax.bar(MONTHS, [mo.loc[m, "median"] if m in mo.index else 0
+                    for m in range(1, 13)], color="#1f5f8b")
+    if overall:
+      ax.axhline(overall, color="#b4451f", lw=1.1, ls="--")
+    style_axes(ax, "Typical value by month", UNIT)
+    REPORT.figure(fig, "Dashed line is an average day. With fewer than three "
+                       "years these bars are suggestive, not established.")
 else:
   print("Less than a year of data: no yearly cycle can be measured.")
 
@@ -368,6 +512,45 @@ if hmap:
     print("\nNo single holiday clears the bar on its own. With a handful of")
     print("observations each that is common, and the covariate can still help.")
 
+  if REPORT:
+    REPORT.h2("Holidays")
+    REPORT.p(f"An ordinary day is {base_med:,.0f} {UNIT}. Every figure below is "
+             f"a multiple of that, so 2.00x means double.")
+    tag = lambda v: ('<span class="tag yes">yes</span>' if v == "yes" else
+                     '<span class="tag no">no</span>' if v == "no" else
+                     '<span class="tag">too few</span>')
+    fmt = lambda v: f"{v:.2f}x" if np.isfinite(v) else "-"
+    rows_html = []
+    for r in rows:
+      verdict = ("yes" if (np.isfinite(r["p"]) and r["p"] < 0.05)
+                 else "no" if np.isfinite(r["p"]) else "too few")
+      clash = any(np.isfinite(r[k]) and r[k] < 0 for k in ("on", "eve", "after"))
+      rows_html.append([
+          r["name"] + ("  *" if clash else ""), r["days"],
+          fmt(r["eve"]), fmt(r["on"]), fmt(r["after"]), (tag(verdict), "")])
+    REPORT.table(["holiday", "days seen", "eve", "on the day", "day after",
+                  "real effect?"], rows_html, numeric={1, 2, 3, 4})
+    REPORT.p("'real effect?' asks whether the difference is large and "
+             "consistent enough to be more than chance. 'too few' means a "
+             "holiday falling on one day a year cannot be judged either way.")
+    if any(any(np.isfinite(r[k]) and r[k] < 0 for k in ("on", "eve", "after"))
+           for r in rows):
+      REPORT.note("* a negative multiple means that day usually carries a "
+                  "settlement, so the holiday collides with a payment date. "
+                  "That is a calendar coincidence, not the holiday moving "
+                  "spending.")
+    named = [r for r in rows if np.isfinite(r["on"])][:12]
+    if named:
+      fig, ax = plt.subplots(figsize=(10, max(2.6, 0.34 * len(named))))
+      labels = [r["name"][:38] for r in named][::-1]
+      vals = [r["on"] for r in named][::-1]
+      cols = ["#1f7a4d" if v > 1 else "#b4451f" for v in vals]
+      ax.barh(labels, vals, color=cols)
+      ax.axvline(1.0, color="#1a1d21", lw=1.0)
+      style_axes(ax, "Effect on the day itself, as a multiple of an ordinary day")
+      REPORT.figure(fig, "The line at 1.00 is an ordinary day. Bars are "
+                         "clipped to the twelve largest effects.")
+
   print("\nEvery holiday date in range, with the value on the day:\n")
   for name in sorted(set(in_range.values())):
     days = sorted(d for d, n in in_range.items() if n == name)
@@ -423,6 +606,26 @@ try:
         break
     print(f"  {p_:>5} steps back  {float(lags[p_]):>+13.3f}{label}")
 
+  if REPORT:
+    REPORT.h2("Memory: which gaps repeat")
+    REPORT.p("How much a day resembles the day N steps earlier. Correlation "
+             "has no unit. Above about +0.2 is a real repeat; near zero means "
+             "that gap carries no memory.")
+    REPORT.table(["gap (steps)", "meaning", "correlation"],
+                 [[lag, meaning, f"{float(lags[lag]):+.3f}"]
+                  for lag, meaning in NAMED if lag <= nlags],
+                 numeric={0, 2})
+    fig, ax = plt.subplots(figsize=(11, 3))
+    upto = min(len(lags) - 1, 400)
+    ax.bar(range(1, upto + 1), lags[1:upto + 1], color="#8a949e", width=1.0)
+    for lag, _ in NAMED:
+      if lag <= upto:
+        ax.bar([lag], [lags[lag]], color="#b4451f", width=2.0)
+    ax.axhline(0, color="#1a1d21", lw=0.8)
+    style_axes(ax, "Correlation against every gap", "correlation")
+    REPORT.figure(fig, "Named cycles are marked in red. Regularly spaced peaks "
+                       "are a rhythm; a single isolated peak usually is not.")
+
   weekly_family = [p_ for p_ in peaks if p_ % 7 == 0]
   if len(weekly_family) >= len(peaks) / 2:
     print(f"\n  {len(weekly_family)} of the {len(peaks)} strongest repeats are exact")
@@ -474,5 +677,17 @@ if args.plot:
   fig.tight_layout()
   fig.savefig("explore.png", dpi=130)
   print("\nwritten: explore.png")
+
+if REPORT:
+  REPORT.h2("Unusual days")
+  REPORT.p(f"{len(big):,} days sit more than {fence:,.0f} {UNIT} away from a "
+           f"typical day, which is {len(big) / len(y):.1%} of the series.")
+  if len(big):
+    top = big.reindex(big.abs().sort_values(ascending=False).index).head(15)
+    REPORT.table(["date", "weekday", f"value ({UNIT})", "day of month"],
+                 [[f"{w:%Y-%m-%d}", DAYS[w.dayofweek], f"{v:,.0f}", w.day]
+                  for w, v in top.items()], numeric={2, 3})
+  path = REPORT.save(args.html)
+  print(f"\nwritten: {path}")
 
 print("\ndone.")

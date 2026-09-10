@@ -41,3 +41,8 @@ model.safetensors
 *.part-*
 
 sweep_results.csv
+
+# HTML reports contain your real figures. This fork is public.
+explore.html
+forecast.html
+*.html

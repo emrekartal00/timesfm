@@ -116,6 +116,26 @@ does a cruder version of this without needing an index file.
 
 `--plot` writes `explore.png`; `--out parts.csv` saves the decomposed cycles.
 
+### `--html` — a report you can send to someone
+
+```bash
+python explore.py --excel yourfile.xlsx --target growth --deflator tufe.csv --html
+python credit_card_forecast.py --excel yourfile.xlsx --target growth --rolling 6 --html
+```
+
+Writes `explore.html` and `forecast.html`, or pass a filename after the flag.
+Nothing is written unless the flag is given.
+
+Each is **one self-contained file**: charts are embedded inside it and the
+styling is inline, so it opens in any browser with no internet, nothing
+alongside it, and no CDN. That is deliberate — the machine has no internet, and
+the numbers should not be uploaded anywhere. The explore report carries nine
+sections and eight charts; the forecast report carries the accuracy tables and
+the forecast chart with its 80% band.
+
+**These files hold your real figures**, so `.gitignore` excludes `*.html`. Send
+them by whatever route you would send the spreadsheet itself.
+
 ## 4. What the script does to your data
 
 ### `--target growth` and `--use-growth` are not the same thing

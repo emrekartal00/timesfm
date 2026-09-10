@@ -86,6 +86,10 @@ out.add_argument("--rolling", type=int, default=0, metavar="N",
                  help="score over N rolling origins instead of one holdout")
 out.add_argument("--no-backtest", action="store_true")
 out.add_argument("--plot", action="store_true", help="write forecast.png")
+out.add_argument("--html", nargs="?", const="forecast.html", default=None,
+                 metavar="FILE",
+                 help="write a self-contained HTML report with charts "
+                      "(default forecast.html)")
 out.add_argument("--out", default="forecast.csv")
 args = ap.parse_args()
 
@@ -106,6 +110,15 @@ gbm_params = L.GBMParams(num_leaves=args.num_leaves,
 PARAMS = {"timesfm": tf_params, "gbm": gbm_params}
 
 
+REPORT = None
+if args.html:
+  import matplotlib
+  matplotlib.use("Agg")
+  import matplotlib.pyplot as plt
+  from report import Report, style_axes
+  REPORT = Report("Forecast", f"{args.target} from {args.excel}")
+
+
 def rule(title):
   print(f"\n{'=' * 72}\n{title}\n{'=' * 72}")
 
@@ -124,6 +137,18 @@ print(f"  mean change per step : {money(data.net_change.mean())}")
 print(f"  mean daily purchases : {money(data.purchases.mean())}")
 print(f"  steps with a payment : {(data.payments > 0).sum():>13,} steps "
       f"(largest {money(data.payments.max(), 0)})")
+
+if REPORT:
+  REPORT.h2("What was forecast")
+  REPORT.stats([
+      ("target", args.target),
+      ("model", ", ".join(MODELS)),
+      ("horizon", f"{args.horizon} steps"),
+      ("history", f"{len(data.index):,} steps"),
+      ("unit", UNIT or "-"),
+  ])
+  for note in data.notes:
+    REPORT.note(note)
 
 series = data.target(args.target)
 print(f"\ntarget: {args.target}" + (f"   unit: {UNIT}" if UNIT else ""))
@@ -198,6 +223,22 @@ if not args.no_backtest and len(series) > args.horizon * 3:
   naive = np.resize(series.to_numpy()[:upto][-period:], args.horizon)
   scores["seasonal naive"] = L.score(actual, naive, np.repeat(naive[:, None], 3, axis=1))
   show(scores, "single holdout")
+  if REPORT:
+    REPORT.h2("How accurate has this been?")
+    REPORT.p(f"The last {args.horizon} steps were held back, forecast, then "
+             f"compared with what actually happened. Seasonal naive is the "
+             f"floor any model must clear, not a rival.")
+    REPORT.table(["model", f"MAE ({UNIT})", f"pinball ({UNIT})", "80% coverage",
+                  f"MAE on settlement days ({UNIT})", f"MAE other ({UNIT})"],
+                 [[k, f"{v['mae']:,.0f}", f"{v['pinball']:,.0f}",
+                   f"{v['coverage']:.0%}",
+                   f"{v['mae_spike']:,.0f}" if np.isfinite(v["mae_spike"]) else "-",
+                   f"{v['mae_other']:,.0f}"] for k, v in scores.items()],
+                 numeric={1, 2, 3, 4, 5})
+    REPORT.p("MAE is the average miss on a typical step. Pinball scores the "
+             "whole p10-p90 range rather than just the middle number. Coverage "
+             "is how often the real value landed inside that range, and should "
+             "sit near 80%: far below means the range is too narrow to trust.")
   print("\nOne holdout is one sample. Use --rolling 6 before trusting a ranking.")
 
 if args.rolling:
@@ -222,6 +263,24 @@ if args.rolling:
       print("\nwins: " + ", ".join(f"{k} {v}" for k, v in wins.items()))
     print("\nCoverage should sit near 80%. Well below means the interval is too")
     print("narrow and will under-warn you in a bad month.")
+    if REPORT:
+      REPORT.h2(f"Checked over {args.rolling} separate periods")
+      REPORT.p("One holdout is one lucky or unlucky month. Each row refits the "
+               "model from scratch at an earlier point and scores it on what "
+               "followed.")
+      REPORT.table(["model", f"mean MAE ({UNIT})", f"mean pinball ({UNIT})",
+                    "mean coverage"],
+                   [[k, f"{v.mae.mean():,.0f}", f"{v.pinball.mean():,.0f}",
+                     f"{v.coverage.mean():.0%}"] for k, v in agg.items()],
+                   numeric={1, 2, 3})
+      for k, v in agg.items():
+        fig, ax = plt.subplots(figsize=(9, 2.6))
+        ax.bar([f"origin {i+1}" for i in range(len(v))], v.mae, color="#1f5f8b")
+        ax.axhline(v.mae.mean(), color="#b4451f", ls="--", lw=1.1)
+        style_axes(ax, f"{k}: error at each test period", f"MAE ({UNIT})")
+        REPORT.figure(fig, "Dashed line is the average. Bars of very different "
+                           "heights mean accuracy depends heavily on when you "
+                           "ask, so treat any single number with care.")
 
 
 # ----------------------------------------------------------------- forecast --
@@ -260,6 +319,38 @@ print(result.set_index("date")[fcols].resample("MS").sum().to_string(
 
 result.to_csv(args.out, index=False)
 print(f"\nwritten: {args.out}")
+
+if REPORT:
+  REPORT.h2("The forecast")
+  REPORT.stats([("from", f"{future[0]:%Y-%m-%d}"),
+                ("to", f"{future[-1]:%Y-%m-%d}"),
+                ("steps", str(args.horizon))]
+               + [(c.replace("forecast", "total").replace("_", " ").strip() or "total",
+                   f"{result[c].sum():,.0f} {UNIT}") for c in fcols])
+  REPORT.table(["date", "day"] + [c for c in result.columns
+                                  if c not in ("date", "day")],
+               [[f"{r['date']:%Y-%m-%d}", r["day"]]
+                + [f"{r[c]:,.0f}" for c in result.columns
+                   if c not in ("date", "day")]
+                for _, r in result.iterrows()],
+               numeric=set(range(2, len(result.columns))))
+  colours = {"forecast": "#b4451f", "forecast_timesfm": "#b4451f",
+             "forecast_gbm": "#1f7a4d"}
+  fig, ax = plt.subplots(figsize=(11, 3.6))
+  recent = series.iloc[-min(len(series), args.horizon * 4):]
+  ax.plot(recent.index, recent.to_numpy(), lw=0.9, color="#8a949e",
+          label="history")
+  for c in fcols:
+    sfx = c.replace("forecast", "")
+    ax.plot(future, result[c], lw=1.8, color=colours.get(c, "#1f5f8b"), label=c)
+    ax.fill_between(future, result[f"p10{sfx}"], result[f"p90{sfx}"],
+                    color=colours.get(c, "#1f5f8b"), alpha=0.16)
+  ax.axhline(0, color="#1a1d21", lw=0.7)
+  ax.legend(fontsize=9, frameon=False)
+  style_axes(ax, "Recent history and the forecast ahead", UNIT)
+  REPORT.figure(fig, "The shaded band is the 80% range: the real value is "
+                     "expected inside it about four times in five.")
+  print(f"written: {REPORT.save(args.html)}")
 
 if args.plot:
   import matplotlib
