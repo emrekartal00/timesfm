@@ -185,6 +185,17 @@ GBM_FEATURE_FRACTION = 0.9
 # Sensible range: 0.5 to 1.0.
 
 
+SKIP_FIRST_STEPS = 1
+# How many steps to drop from the very start.
+#
+# Keep this at 1. The daily change is worked out by subtracting yesterday from
+# today, and the first row has no yesterday, so its "change" is always zero --
+# recorded, not observed. Any further zeros right after it are padding rows and
+# are dropped too, automatically.
+#
+# Left in, those fake zeros drag down the first year's average, and every later
+# year is then compared against a number that was never real.
+
 RESCALE_WINDOW = 0
 # Adjust for inflation, or any other drift in the size of the numbers.
 #

@@ -150,6 +150,21 @@ def load(excel, sheet=None, date_col=None, balance_col=None, currency_col=None,
                      f"recomputed version (--use-growth to prefer the sheet's)")
 
   net = net.fillna(0.0)
+
+  # The first step of a difference has no previous day to difference against,
+  # so it is always zero by construction rather than by observation. Leading
+  # zeros after it are padding rows. Both distort year-one averages, which is
+  # what the trend table compares everything else against.
+  skip = S.SKIP_FIRST_STEPS
+  while skip < len(net) and net.iloc[skip] == 0.0:
+    skip += 1
+  if skip:
+    notes.append(f"dropped the first {skip} step(s): a differenced series has "
+                 f"no real first value, and any zeros after it are padding")
+    grid_index = grid_index[skip:]
+    balance = balance.iloc[skip:]
+    net = net.iloc[skip:]
+
   purchases = net.clip(lower=0.0)
   payments = (-net).clip(lower=0.0)
 
@@ -251,6 +266,18 @@ def holiday_dates(index):
     except Exception:
       _HOLIDAY_CACHE[key] = set()      # package missing or country unsupported
   return _HOLIDAY_CACHE[key]
+
+
+def holiday_map(index):
+  """date -> holiday name, covering the index and a year past it."""
+  if not S.USE_HOLIDAYS or not S.HOLIDAY_COUNTRY:
+    return {}
+  try:
+    import holidays as _h
+    years = list(range(index[0].year, index[-1].year + 2))
+    return dict(_h.country_holidays(S.HOLIDAY_COUNTRY, years=years).items())
+  except Exception:
+    return {}
 
 
 def _shift(day, holis, direction):
